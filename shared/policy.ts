@@ -6,7 +6,7 @@ export const POLICY = {
   /** Pickup and return times are in this zone, and billing days are counted in it. CONFIRM: operating zone. */
   timeZone: "America/New_York",
 
-  /** Refundable deposit, charged with the rental and refunded after the return check. Decided by Xavier. */
+  /** Refundable deposit, paid with the rental and returned after the return check. Decided by Xavier. */
   depositCents: 50_00,
 
   /** Delivery to the renter's address. Drop-off only: the renter returns to a pickup location. Decided by Xavier. */
@@ -15,8 +15,24 @@ export const POLICY = {
   /** The pickup choice that means delivery, in quotes and URLs. */
   deliveryChoice: "delivery",
 
-  /** How long a checkout holds the dates before they're released. */
-  holdMinutes: 15,
+  /** How long a checkout holds the dates while the renter pays by Cash App or Chime and uploads proof. */
+  holdMinutes: 30,
+
+  /** A renter can hold or have in review at most this many unpaid bookings at once, so nobody can squat on dates. */
+  maxOpenBookings: 2,
+
+  /** Payment screenshots per booking, and the largest one accepted. */
+  maxProofsPerBooking: 5,
+  maxProofBytes: 5 * 1024 * 1024,
+
+  /** License checks a renter can start before they have to contact the host. Each completed check costs about $1.50. */
+  maxIdentityAttempts: 5,
+
+  /**
+   * The rental agreement renters accept at checkout. Bump the version whenever the text changes.
+   * DECISION: the text is a draft until a lawyer reviews it.
+   */
+  agreementVersion: "2026-11-03-draft",
 
   /** Cleaning and inspection buffer between trips on the same car. DECISION: 2 hours is a placeholder. */
   turnaroundMinutes: 120,

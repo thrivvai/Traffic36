@@ -71,7 +71,12 @@ const trip = {
 
 describe("migrations", () => {
   test("apply cleanly in order", () => {
-    expect(applied).toEqual(["20261103050000_core_schema", "20261103050100_seed_launch_fleet", "20261103060000_pickup_locations"]);
+    expect(applied).toEqual([
+      "20261103050000_core_schema",
+      "20261103050100_seed_launch_fleet",
+      "20261103060000_pickup_locations",
+      "20261103070000_manual_payments",
+    ]);
   });
 
   test("booking and incident codes are sequential and human-readable", async () => {
