@@ -1,4 +1,4 @@
-import type { ApiError, Quote, QuoteRequest, VehicleDetail, VehicleSummary } from "../../shared/types.ts";
+import type { ApiError, Location, Quote, QuoteRequest, VehicleDetail, VehicleSummary } from "../../shared/types.ts";
 
 /** An API failure with the server's own message, ready to show the renter. */
 export class RequestError extends Error {
@@ -28,6 +28,7 @@ export const api = {
   vehicles: (signal?: AbortSignal) => get<{ vehicles: VehicleSummary[] }>("/api/vehicles", signal).then((r) => r.vehicles),
   vehicle: (slug: string, signal?: AbortSignal) =>
     get<{ vehicle: VehicleDetail }>(`/api/vehicles/${encodeURIComponent(slug)}`, signal).then((r) => r.vehicle),
+  locations: (signal?: AbortSignal) => get<{ locations: Location[] }>("/api/locations", signal).then((r) => r.locations),
   quote: (slug: string, trip: QuoteRequest, signal?: AbortSignal) =>
     get<{ quote: Quote }>(`/api/vehicles/${encodeURIComponent(slug)}/quote?${new URLSearchParams(trip)}`, signal).then((r) => r.quote),
 };

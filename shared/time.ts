@@ -53,6 +53,12 @@ export function zonedToUtc(date: string, time: string, timeZone: string): number
   return Math.max(guess, guess + (target - wallClockMs(guess, timeZone)));
 }
 
+/** "07:00" -> "7:00 AM", "21:30" -> "9:30 PM". */
+export function formatClock(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
 /** YYYY-MM-DD for the day containing `ts` in `timeZone`. */
 export function localDate(ts: number, timeZone: string): string {
   return new Date(wallClockMs(ts, timeZone)).toISOString().slice(0, 10);

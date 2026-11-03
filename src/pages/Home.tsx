@@ -19,6 +19,7 @@ const TRUST: [IconName, string, string][] = [
 
 export function Home() {
   const { state, retry } = useRequest("vehicles", (signal) => api.vehicles(signal));
+  const locations = useRequest("locations", (signal) => api.locations(signal)).state;
   const [trip, setTrip] = useTrip();
   const navigate = useNavigate();
   const search = tripSearch(trip);
@@ -40,7 +41,7 @@ export function Home() {
             </h1>
             <p className="sub">
               Insurance is included on every car. The deposit is {money(POLICY.depositCents)}. Weekly rates apply on their own. Pick up from a
-              smart lockbox, with no counter and no line.
+              smart lockbox at one of three spots, or have the car delivered.
             </p>
             <form
               className="qbar"
@@ -107,6 +108,31 @@ export function Home() {
           </div>
         ) : (
           <div className="empty"><h2>Every car is out right now</h2><p>Check back soon.</p></div>
+        )}
+      </section>
+
+      <section className="section tight" id="locations" aria-labelledby="locations-title">
+        <div className="sec-head">
+          <h2 id="locations-title">Pick up where it suits you</h2>
+          <p>Choose a pickup spot and a return spot for each trip. They don't have to match.</p>
+        </div>
+        {locations.status === "ready" && (
+          <div className="locs">
+            {locations.data.map((l) => (
+              <div className="loc" key={l.slug}>
+                <div className="ico"><Icon name="pin" size={19} /></div>
+                <h3>{l.name}</h3>
+                <p>{l.address ?? l.kind}</p>
+                <p>{l.inPersonAvailable ? "Lockbox or in-person handoff" : "Lockbox pickup"}</p>
+              </div>
+            ))}
+            <div className="loc delivery">
+              <div className="ico"><Icon name="car" size={19} /></div>
+              <h3>Delivery</h3>
+              <p>We bring the car to you for {money(POLICY.deliveryFeeCents)}.</p>
+              <p>Return it to any pickup spot.</p>
+            </div>
+          </div>
         )}
       </section>
 

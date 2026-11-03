@@ -8,6 +8,14 @@ export type Spec = { value: string; label: string };
 
 export type Lot = { slug: string; name: string; kind: string };
 
+/** A pickup and return location. Hours are local "HH:MM"; null means the app's standard hours. */
+export type Location = Lot & {
+  address: string | null;
+  opensAt: string | null;
+  closesAt: string | null;
+  inPersonAvailable: boolean;
+};
+
 export type VehicleSummary = {
   slug: string;
   year: number;
@@ -29,7 +37,16 @@ export type VehicleDetail = VehicleSummary & {
   minDriverAge: number;
 };
 
-export type QuoteRequest = { startDate: string; startTime: string; endDate: string; endTime: string };
+export type QuoteRequest = {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  /** A location slug, or "delivery". */
+  pickup: string;
+  /** A location slug. Delivery is drop-off only. */
+  returnTo: string;
+};
 
 export type Quote = {
   start: string; // ISO instant
@@ -38,6 +55,10 @@ export type Quote = {
   lines: QuoteLine[];
   rentalCents: number;
   weeklySavingsCents: number;
+  /** Charged when the renter chooses delivery. Delivery bookings wait for the host to approve the address. */
+  deliveryFeeCents: number;
+  pickup: { kind: "location"; location: Location } | { kind: "delivery" };
+  returnTo: Location;
   depositCents: number;
   dueTodayCents: number;
   available: boolean;

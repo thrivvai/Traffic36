@@ -13,6 +13,7 @@ export function VehiclePage() {
   const { slug = "" } = useParams();
   const [params] = useSearchParams();
   const { state, retry } = useRequest(`vehicle:${slug}`, (signal) => api.vehicle(slug, signal));
+  const locations = useRequest("locations", (signal) => api.locations(signal));
 
   useEffect(() => {
     if (state.status === "ready") document.title = `${state.data.year} ${state.data.make} ${state.data.model} | Traffic36`;
@@ -28,7 +29,16 @@ export function VehiclePage() {
       </div>
     );
   }
-  if (state.status === "loading") {
+  if (locations.state.status === "error") {
+    return (
+      <div className="page empty" role="alert">
+        <h1>We couldn't load pickup locations</h1>
+        <p>{locations.state.error.message}</p>
+        <button className="btn btn-ghost" onClick={locations.retry}>Try again</button>
+      </div>
+    );
+  }
+  if (state.status === "loading" || locations.state.status === "loading") {
     return (
       <div className="page" aria-busy="true">
         <div className="vd">
@@ -40,6 +50,9 @@ export function VehiclePage() {
   }
 
   const v = state.data;
+  const places = locations.state.data;
+  const placeNames = places.map((l) => l.name);
+  const placeList = placeNames.length > 1 ? `${placeNames.slice(0, -1).join(", ")} or ${placeNames.at(-1)}` : (placeNames[0] ?? "");
   return (
     <div className="page">
       <Link className="crumb" to={`/${params.size ? `?${params}` : ""}#cars`}><Icon name="arrowLeft" size={16} />All cars</Link>
@@ -64,10 +77,10 @@ export function VehiclePage() {
             <li><Icon name="fuel" size={16} />{v.fuel} fuel. Return it at the level you picked it up.</li>
             <li><Icon name="lock" size={16} />A {money(POLICY.depositCents)} refundable deposit covers fuel and incidentals. It's refunded after your return check.</li>
             <li><Icon name="id" size={16} />Drivers {v.minDriverAge} and older with a valid license.</li>
-            <li><Icon name="pin" size={16} />Pickup and return at {v.lot.name}.</li>
+            <li><Icon name="pin" size={16} />Pick up and return at {placeList}, or have it delivered to you for {money(POLICY.deliveryFeeCents)}.</li>
           </ul>
         </div>
-        <PriceBox vehicle={v} />
+        <PriceBox vehicle={v} locations={places} />
       </div>
     </div>
   );

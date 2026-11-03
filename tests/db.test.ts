@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest"
 import { wrapPool, type TxDb } from "../server/db.ts";
 import { findConflicts, lockVehicle } from "../server/availability.ts";
 import { HttpError } from "../server/http.ts";
+import { getLocation, listLocations } from "../server/locations.ts";
 import { quoteForVehicle } from "../server/quote.ts";
 import { getVehicle, listVehicles } from "../server/vehicles.ts";
 
@@ -50,19 +51,27 @@ async function vehicleId(slug: string) {
 }
 
 async function book(slug: string, start: string, end: string, status = "confirmed", holdExpiresAt: string | null = null) {
+  const base = (await getLocation(db, "norman-berry"))!.id;
   await db.query(
     `INSERT INTO bookings (vehicle_id, renter_id, starts_at, ends_at, status, hold_expires_at,
-                           billable_days, rental_cents, deposit_cents, charge_cents)
-     VALUES ($1, $2, $3, $4, $5, $6, 1, 9500, 5000, 14500)`,
-    [await vehicleId(slug), renterId, start, end, status, holdExpiresAt],
+                           billable_days, rental_cents, deposit_cents, charge_cents, pickup_lot_id, return_lot_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 1, 9500, 5000, 14500, $7, $7)`,
+    [await vehicleId(slug), renterId, start, end, status, holdExpiresAt, base],
   );
 }
 
-const trip = { startDate: "2026-11-06", startTime: "10:00", endDate: "2026-11-09", endTime: "10:00" };
+const trip = {
+  startDate: "2026-11-06",
+  startTime: "10:00",
+  endDate: "2026-11-09",
+  endTime: "10:00",
+  pickup: "norman-berry",
+  returnTo: "norman-berry",
+};
 
 describe("migrations", () => {
   test("apply cleanly in order", () => {
-    expect(applied).toEqual(["20261103050000_core_schema", "20261103050100_seed_launch_fleet"]);
+    expect(applied).toEqual(["20261103050000_core_schema", "20261103050100_seed_launch_fleet", "20261103060000_pickup_locations"]);
   });
 
   test("booking and incident codes are sequential and human-readable", async () => {
@@ -118,11 +127,71 @@ describe("quotes", () => {
     const reject = (input: object) => quoteForVehicle(db, GLC, { ...trip, ...input }, NOW);
     await expect(reject({ startDate: "2026-11-31" })).rejects.toMatchObject({ status: 400, field: "startDate" });
     await expect(reject({ startTime: "25:00" })).rejects.toMatchObject({ field: "startTime" });
-    await expect(reject({ startTime: "05:00" })).rejects.toMatchObject({ message: "Pickups and returns run 07:00 to 21:00." });
+    await expect(reject({ startTime: "05:00" })).rejects.toMatchObject({ message: "Pickups and returns run 7:00 AM to 9:00 PM." });
     await expect(reject({ endDate: "2026-11-05" })).rejects.toMatchObject({ message: "Return has to be after pickup." });
     await expect(reject({ startDate: "2026-11-03", startTime: "10:30" })).rejects.toMatchObject({ field: "startDate" }); // under an hour away
     await expect(reject({ endDate: "2026-12-31" })).rejects.toMatchObject({ message: "Trips can run up to 45 days." });
     await expect(quoteForVehicle(db, "nope", trip, NOW)).rejects.toBeInstanceOf(HttpError);
+  });
+});
+
+describe("locations and delivery", () => {
+  test("the three real locations replace the sample lots, and both cars are based at Norman Berry Dr", async () => {
+    const locations = await listLocations(db);
+    expect(locations.map((l) => l.slug)).toEqual(["norman-berry", "lovejoy-regional-park", "east-hampton-community-park"]);
+    expect(locations[0]).toMatchObject({ name: "Norman Berry Dr", address: "3400 Norman Berry Dr, Atlanta, GA 30344", inPersonAvailable: true });
+    expect((await listVehicles(db)).every((v) => v.lot.slug === "norman-berry")).toBe(true);
+    expect(await getLocation(db, "grandview")).toBeNull();
+  });
+
+  test("delivery adds $65 to the price and to what's due today", async () => {
+    const q = await quoteForVehicle(db, ELANTRA, { ...trip, pickup: "delivery", returnTo: "lovejoy-regional-park" }, NOW);
+    expect(q).toMatchObject({ rentalCents: 22500, deliveryFeeCents: 6500, depositCents: 5000, dueTodayCents: 22500 + 6500 + 5000 });
+    expect(q.pickup).toEqual({ kind: "delivery" });
+    expect(q.returnTo.slug).toBe("lovejoy-regional-park");
+    const atBase = await quoteForVehicle(db, ELANTRA, trip, NOW);
+    expect(atBase.deliveryFeeCents).toBe(0);
+    expect(atBase.pickup).toMatchObject({ kind: "location", location: { slug: "norman-berry" } });
+    expect(JSON.stringify(atBase)).not.toContain('"id"'); // internal ids never reach the browser
+  });
+
+  test("delivery is drop-off only, and unknown locations are rejected", async () => {
+    const reject = (input: object) => quoteForVehicle(db, GLC, { ...trip, ...input }, NOW);
+    await expect(reject({ returnTo: "delivery" })).rejects.toMatchObject({ field: "returnTo", message: "Delivery is drop-off only. Choose a location to return the car to." });
+    await expect(reject({ pickup: "grandview" })).rejects.toMatchObject({ field: "pickup" });
+    await expect(reject({ pickup: "" })).rejects.toMatchObject({ message: "Choose where to pick up the car." });
+  });
+
+  test("a location's own hours narrow pickup and return times; delivery uses standard hours", async () => {
+    await db.query(`UPDATE lots SET opens_at = '08:00', closes_at = '18:00' WHERE slug = 'lovejoy-regional-park'`);
+    try {
+      const park = { ...trip, pickup: "lovejoy-regional-park", returnTo: "lovejoy-regional-park" };
+      await expect(quoteForVehicle(db, GLC, { ...park, startTime: "19:00" }, NOW)).rejects.toMatchObject({
+        field: "startTime",
+        message: "Lovejoy Regional Park is open 8:00 AM to 6:00 PM. Choose a pickup time in those hours.",
+      });
+      await expect(quoteForVehicle(db, GLC, { ...park, endTime: "07:30" }, NOW)).rejects.toMatchObject({ field: "endTime" });
+      expect((await quoteForVehicle(db, GLC, park, NOW)).available).toBe(true);
+      expect((await quoteForVehicle(db, GLC, { ...park, pickup: "delivery", startTime: "19:00" }, NOW)).deliveryFeeCents).toBe(6500);
+      expect((await listLocations(db))[1]).toMatchObject({ opensAt: "08:00", closesAt: "18:00" });
+    } finally {
+      await db.query(`UPDATE lots SET opens_at = NULL, closes_at = NULL WHERE slug = 'lovejoy-regional-park'`);
+    }
+  });
+
+  test("a booking picks up at a location or by delivery, never both or neither", async () => {
+    const base = (await getLocation(db, "norman-berry"))!.id;
+    const vid = await vehicleId(GLC);
+    const q = (pickupLot: string | null, address: string | null) =>
+      db.query(
+        `INSERT INTO bookings (vehicle_id, renter_id, starts_at, ends_at, status, billable_days, rental_cents, deposit_cents,
+                               charge_cents, pickup_lot_id, delivery_address, return_lot_id)
+         VALUES ($1, $2, '2026-12-01T15:00:00Z', '2026-12-02T15:00:00Z', 'confirmed', 1, 9500, 5000, 14500, $3, $4, $5)`,
+        [vid, renterId, pickupLot, address, base],
+      );
+    await expect(q(null, null)).rejects.toThrow();
+    await expect(q(base, "12 Main St")).rejects.toThrow();
+    await expect(q(null, "12 Main St, Atlanta, GA")).resolves.toBeDefined();
   });
 });
 

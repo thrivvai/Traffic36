@@ -1,5 +1,6 @@
 import type { Tier } from "../../shared/types.ts";
 import { POLICY } from "../../shared/policy.ts";
+import { formatClock } from "../../shared/time.ts";
 
 export { formatMoney as money } from "../../shared/pricing.ts";
 
@@ -17,18 +18,14 @@ export function formatWhen(iso: string): string {
   });
 }
 
-/** Half-hour slots between the first and last pickup times, e.g. ["07:00", "07:30", ...]. */
-export function timeSlots(): { value: string; label: string }[] {
+/** Half-hour slots inside the standard hours, narrowed to a location's own hours when it has them. */
+export function timeSlots(hours?: { opensAt: string | null; closesAt: string | null }): { value: string; label: string }[] {
+  const from = hours?.opensAt && hours.opensAt > POLICY.firstSlot ? hours.opensAt : POLICY.firstSlot;
+  const to = hours?.closesAt && hours.closesAt < POLICY.lastSlot ? hours.closesAt : POLICY.lastSlot;
   const out: { value: string; label: string }[] = [];
-  const [fh] = POLICY.firstSlot.split(":").map(Number) as [number];
-  const [lh] = POLICY.lastSlot.split(":").map(Number) as [number];
-  for (let h = fh; h <= lh; h++) {
-    for (const m of [0, 30]) {
-      if (h === lh && m > 0) break;
-      const value = `${String(h).padStart(2, "0")}:${m ? "30" : "00"}`;
-      const label = `${((h + 11) % 12) + 1}:${m ? "30" : "00"} ${h < 12 ? "AM" : "PM"}`;
-      out.push({ value, label });
-    }
+  for (let mins = 0; mins < 24 * 60; mins += 30) {
+    const value = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${mins % 60 ? "30" : "00"}`;
+    if (value >= from && value <= to) out.push({ value, label: formatClock(value) });
   }
   return out;
 }

@@ -9,6 +9,12 @@ export const POLICY = {
   /** Refundable deposit, charged with the rental and refunded after the return check. Decided by Xavier. */
   depositCents: 50_00,
 
+  /** Delivery to the renter's address. Drop-off only: the renter returns to a pickup location. Decided by Xavier. */
+  deliveryFeeCents: 65_00,
+
+  /** The pickup choice that means delivery, in quotes and URLs. */
+  deliveryChoice: "delivery",
+
   /** How long a checkout holds the dates before they're released. */
   holdMinutes: 15,
 

@@ -19,7 +19,7 @@ Car rental web app: renters browse, price and book cars; the host runs the fleet
 shared/        Business rules (policy.ts), pricing and time-zone math. Used by the browser and the server.
 server/        Data access: listings, availability, quotes, HTTP helpers.
 netlify/
-  functions/   API routes: /api/vehicles, /api/vehicles/:slug, /api/vehicles/:slug/quote
+  functions/   API routes: /api/vehicles, /api/vehicles/:slug, /api/vehicles/:slug/quote, /api/locations
   database/migrations/   Schema and seed data. Never edit a migration after it has deployed.
 src/           The React app.
 public/cars/   Launch car photos.
@@ -48,4 +48,5 @@ The site sends `X-Robots-Tag: noindex` until launch. Remove that header block in
 Every value that needs a real answer is marked in code:
 
 - `shared/policy.ts`: `CONFIRM` (needs Roamly or a vendor) and `DECISION` (needs your call), for example the turnaround buffer and booking window.
-- `netlify/database/migrations/20261103050100_seed_launch_fleet.sql`: the two pickup lots are the mock's samples. Minimum driver ages wait on Roamly.
+- Park addresses and opening hours (`lots.address`, `opens_at`, `closes_at`), set in a new migration. Until a location has hours, the app offers the standard 7:00 AM to 9:00 PM window.
+- Minimum driver ages per car wait on Roamly.
