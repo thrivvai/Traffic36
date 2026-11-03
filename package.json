@@ -1,0 +1,38 @@
+{
+  "name": "traffic36",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12.2"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b",
+    "db:migrate": "node scripts/migrate-local.mjs"
+  },
+  "dependencies": {
+    "@netlify/database": "2.0.1",
+    "@netlify/functions": "6.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.5"
+  },
+  "devDependencies": {
+    "@netlify/database-dev": "1.0.1",
+    "@netlify/vite-plugin": "3.0.1",
+    "@types/node": "22.18.0",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "pg": "8.23.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}
