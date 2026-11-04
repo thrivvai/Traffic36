@@ -143,10 +143,21 @@ function AccountStep({ me }: { me: Me | null }) {
     );
   }
   if (account.state.status === "error") {
+    // Signed in with Clerk, but our server didn't accept the sign-in: a setup problem, not the renter's.
+    const rejected = account.state.error instanceof RequestError && account.state.error.status === 401;
     return (
       <div className="note bad" role="alert">
         <Icon name="alert" size={16} />
-        <span>{account.state.error.message} <button className="link" onClick={() => void account.refresh()}>Try again</button></span>
+        <span>
+          {rejected
+            ? "We couldn't confirm your sign-in. Sign out, sign back in, and try again. If it keeps happening, message us at admin@traffic36.com."
+            : account.state.error.message}{" "}
+          {rejected ? (
+            <button className="link" onClick={() => void session.signOut()}>Sign out</button>
+          ) : (
+            <button className="link" onClick={() => void account.refresh()}>Try again</button>
+          )}
+        </span>
       </div>
     );
   }

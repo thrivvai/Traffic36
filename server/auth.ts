@@ -17,23 +17,47 @@ function bearer(req: Request): string | null {
   return token || null;
 }
 
+/** Every address this deploy answers on. Netlify sets URL, DEPLOY_PRIME_URL and DEPLOY_URL. */
+function siteOrigins(req: Request): string[] {
+  const origins = new Set([new URL(req.url).origin]);
+  for (const name of ["URL", "DEPLOY_PRIME_URL", "DEPLOY_URL"]) {
+    const value = env(name) ?? process.env[name];
+    if (!value) continue;
+    try {
+      origins.add(new URL(value).origin);
+    } catch {
+      // ignore a malformed value
+    }
+  }
+  return [...origins];
+}
+
 /** Clerk in production. Keys are read on first use, so routes that never authenticate don't need them. */
 export function clerkAuth(): AuthProvider {
   let client: ReturnType<typeof createClerkClient> | null = null;
   return {
     async userIdFrom(req) {
       const token = bearer(req);
-      if (!token) return null;
+      if (!token) {
+        console.warn("Signed-in call arrived without a session token.");
+        return null;
+      }
       const { data, errors } = await verifyToken(token, {
         secretKey: requireEnv("CLERK_SECRET_KEY"),
         // Optional: Clerk's PEM public key makes verification networkless.
         jwtKey: env("CLERK_JWT_KEY"),
-        // The token must have been issued to this site. The API and the app share one origin.
-        authorizedParties: [new URL(req.url).origin],
+        // The token must have been issued to this site: the address the request came in on, or
+        // one of this deploy's own addresses as Netlify reports them.
+        authorizedParties: siteOrigins(req),
       });
+      if (errors) {
+        // Never log the token itself. The reason says which setting to fix.
+        const [e] = errors as [{ reason?: string; message?: string }];
+        console.warn(`Clerk rejected a session token: ${e.reason ?? "unknown"}. ${e.message ?? ""}`);
+        return null;
+      }
       const sub = (data as { sub?: unknown } | undefined)?.sub;
-      if (errors || typeof sub !== "string") return null;
-      return sub;
+      return typeof sub === "string" ? sub : null;
     },
     async profile(clerkUserId) {
       client ??= createClerkClient({ secretKey: requireEnv("CLERK_SECRET_KEY") });
