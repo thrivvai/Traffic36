@@ -1,10 +1,11 @@
+import { Link } from "react-router-dom";
 import type { Location, VehicleDetail } from "../../shared/types.ts";
 import { POLICY } from "../../shared/policy.ts";
 import { localDate } from "../../shared/time.ts";
 import { api, RequestError } from "../lib/api.ts";
 import { formatWhen, money, timeSlots } from "../lib/format.ts";
 import { useRequest } from "../lib/useRequest.ts";
-import { useTrip } from "../lib/useTrip.ts";
+import { tripSearch, useTrip } from "../lib/useTrip.ts";
 import { Icon } from "./Icon.tsx";
 import { Rates } from "./VehicleCard.tsx";
 
@@ -116,10 +117,16 @@ export function PriceBox({ vehicle, locations }: { vehicle: VehicleDetail; locat
         )}
       </div>
 
-      <button className="btn btn-heat btn-block" style={{ marginTop: 16 }} disabled>
-        Online booking opens soon
-      </button>
-      <p className="fine">Times are local to the pickup location. The deposit is refunded after your return check.</p>
+      {state.status === "ready" && state.data.available ? (
+        <Link className="btn btn-heat btn-block" style={{ marginTop: 16 }} to={`/checkout/${vehicle.slug}${tripSearch(trip)}`}>
+          Book this car
+        </Link>
+      ) : (
+        <button className="btn btn-heat btn-block" style={{ marginTop: 16 }} disabled>
+          {state.status === "loading" ? "Checking…" : "Choose available dates"}
+        </button>
+      )}
+      <p className="fine">Pay by Cash App or Chime. Times are local to the pickup location. The deposit is refunded after your return check.</p>
     </aside>
   );
 }

@@ -3,8 +3,19 @@ import { MINUTE, POLICY } from "../shared/policy.ts";
 
 export type Conflict = { kind: "booking" | "extension" | "block"; start: Date; end: Date };
 
-/** Booking states that occupy a car's calendar. A `held` booking counts only until its hold expires. */
-export const BLOCKING_STATUSES = ["held", "awaiting_verification", "needs_review", "confirmed", "active"] as const;
+/** Booking states that occupy a car's calendar. */
+export const BLOCKING_STATUSES = [
+  "held",
+  "awaiting_verification",
+  "needs_review",
+  "awaiting_payment",
+  "payment_review",
+  "confirmed",
+  "active",
+] as const;
+
+/** States that block only until `hold_expires_at`. Once proof is uploaded, the booking blocks until the host decides. */
+export const HOLD_STATUSES = ["held", "awaiting_payment"] as const;
 
 /**
  * Everything on this car that overlaps [start, end), padded by the turnaround buffer on both sides.
@@ -28,7 +39,7 @@ export async function findConflicts(
     SELECT 'booking' AS kind, starts_at, ends_at FROM bookings
      WHERE vehicle_id = $1 AND starts_at < $3 AND ends_at > $2
        AND status = ANY($4::text[])
-       AND (status <> 'held' OR hold_expires_at > $5)
+       AND (status <> ALL($7::text[]) OR hold_expires_at > $5)
        AND ($6::uuid IS NULL OR id <> $6::uuid)
     UNION ALL
     SELECT 'extension', e.old_ends_at, e.new_ends_at FROM extensions e
@@ -41,7 +52,7 @@ export async function findConflicts(
      WHERE vehicle_id = $1 AND starts_at < $3 AND ends_at > $2
     ORDER BY 2
     `,
-    [vehicleId, from, to, BLOCKING_STATUSES, opts.now, opts.ignoreBookingId ?? null],
+    [vehicleId, from, to, BLOCKING_STATUSES, opts.now, opts.ignoreBookingId ?? null, HOLD_STATUSES],
   );
   return rows.map((r) => ({ kind: r.kind, start: new Date(r.starts_at), end: new Date(r.ends_at) }));
 }

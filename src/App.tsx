@@ -2,8 +2,14 @@ import { useEffect } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { Footer } from "./components/Footer.tsx";
 import { Header } from "./components/Header.tsx";
+import { AgreementPage } from "./pages/AgreementPage.tsx";
+import { CheckoutPage } from "./pages/CheckoutPage.tsx";
 import { Home } from "./pages/Home.tsx";
+import { HostPage } from "./pages/HostPage.tsx";
+import { LicensePage } from "./pages/LicensePage.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
+import { TripPage } from "./pages/TripPage.tsx";
+import { TripsPage } from "./pages/TripsPage.tsx";
 import { VehiclePage } from "./pages/VehiclePage.tsx";
 
 export function App() {
@@ -21,6 +27,12 @@ export function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/cars/:slug" element={<VehiclePage />} />
+          <Route path="/checkout/:slug" element={<CheckoutPage />} />
+          <Route path="/trips" element={<TripsPage />} />
+          <Route path="/trips/:code" element={<TripPage />} />
+          <Route path="/host" element={<HostPage />} />
+          <Route path="/license" element={<LicensePage />} />
+          <Route path="/agreement" element={<AgreementPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

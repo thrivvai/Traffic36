@@ -2,9 +2,9 @@ import type { Db } from "./db.ts";
 import { badRequest, notFound } from "./http.ts";
 import { findConflicts } from "./availability.ts";
 import { getLocation, type LocationRecord } from "./locations.ts";
-import { getVehicle } from "./vehicles.ts";
+import { getVehicle, type VehicleRecord } from "./vehicles.ts";
 import { DAY, MINUTE, POLICY } from "../shared/policy.ts";
-import { quoteRental } from "../shared/pricing.ts";
+import { quoteRental, type RentalQuote } from "../shared/pricing.ts";
 import { formatClock, isDateString, isTimeString, zonedToUtc } from "../shared/time.ts";
 import type { Quote, QuoteRequest } from "../shared/types.ts";
 
@@ -62,10 +62,21 @@ export async function resolvePlaces(db: Db, input: TripInput): Promise<Places> {
   return { pickup: pickupLoc, returnTo: returnLoc };
 }
 
-const publicLocation = ({ id: _id, ...loc }: LocationRecord) => loc;
+export const publicLocation = ({ id: _id, ...loc }: LocationRecord) => loc;
 
-/** A server-priced quote with live availability. Nothing here trusts a number from the browser. */
-export async function quoteForVehicle(db: Db, slug: string, input: TripInput, now = new Date()): Promise<Quote> {
+export type PricedTrip = {
+  vehicle: VehicleRecord;
+  start: Date;
+  end: Date;
+  places: Places;
+  rental: RentalQuote;
+  deliveryFeeCents: number;
+  depositCents: number;
+  totalCents: number;
+};
+
+/** Validates a trip and prices it. Shared by quotes and bookings so the two can never disagree. */
+export async function priceTrip(db: Db, slug: string, input: TripInput, now: Date): Promise<PricedTrip> {
   const vehicle = await getVehicle(db, slug);
   if (!vehicle) throw notFound("That car isn't available.");
   const trip = parseTrip(input, now);
@@ -73,22 +84,37 @@ export async function quoteForVehicle(db: Db, slug: string, input: TripInput, no
   if (places.pickup !== "delivery") checkHours(places.pickup, trip.startTime, "startTime");
   checkHours(places.returnTo, trip.endTime, "endTime");
 
-  const q = quoteRental({ dailyCents: vehicle.dailyCents, weeklyCents: vehicle.weeklyCents }, trip.start.getTime(), trip.end.getTime(), POLICY.timeZone);
+  const rental = quoteRental({ dailyCents: vehicle.dailyCents, weeklyCents: vehicle.weeklyCents }, trip.start.getTime(), trip.end.getTime(), POLICY.timeZone);
   const deliveryFeeCents = places.pickup === "delivery" ? POLICY.deliveryFeeCents : 0;
-  const conflicts = await findConflicts(db, vehicle.id, trip.start, trip.end, { now });
+  return {
+    vehicle,
+    start: trip.start,
+    end: trip.end,
+    places,
+    rental,
+    deliveryFeeCents,
+    depositCents: POLICY.depositCents,
+    totalCents: rental.rentalCents + deliveryFeeCents + POLICY.depositCents,
+  };
+}
+
+/** A server-priced quote with live availability. Nothing here trusts a number from the browser. */
+export async function quoteForVehicle(db: Db, slug: string, input: TripInput, now = new Date()): Promise<Quote> {
+  const p = await priceTrip(db, slug, input, now);
+  const conflicts = await findConflicts(db, p.vehicle.id, p.start, p.end, { now });
   const first = conflicts[0];
   return {
-    start: trip.start.toISOString(),
-    end: trip.end.toISOString(),
-    days: q.days,
-    lines: q.lines,
-    rentalCents: q.rentalCents,
-    weeklySavingsCents: q.weeklySavingsCents,
-    deliveryFeeCents,
-    pickup: places.pickup === "delivery" ? { kind: "delivery" } : { kind: "location", location: publicLocation(places.pickup) },
-    returnTo: publicLocation(places.returnTo),
-    depositCents: POLICY.depositCents,
-    dueTodayCents: q.rentalCents + deliveryFeeCents + POLICY.depositCents,
+    start: p.start.toISOString(),
+    end: p.end.toISOString(),
+    days: p.rental.days,
+    lines: p.rental.lines,
+    rentalCents: p.rental.rentalCents,
+    weeklySavingsCents: p.rental.weeklySavingsCents,
+    deliveryFeeCents: p.deliveryFeeCents,
+    pickup: p.places.pickup === "delivery" ? { kind: "delivery" } : { kind: "location", location: publicLocation(p.places.pickup) },
+    returnTo: publicLocation(p.places.returnTo),
+    depositCents: p.depositCents,
+    dueTodayCents: p.totalCents,
     available: !first,
     conflict: first ? { start: first.start.toISOString(), end: first.end.toISOString() } : null,
   };
