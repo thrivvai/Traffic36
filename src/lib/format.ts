@@ -4,6 +4,12 @@ import { formatClock } from "../../shared/time.ts";
 
 export { formatMoney as money } from "../../shared/pricing.ts";
 
+/** "+14705550123" as "(470) 555-0123". Anything that isn't a US number is shown as given. */
+export function formatPhone(phone: string): string {
+  const m = /^\+?1?(\d{3})(\d{3})(\d{4})$/.exec(phone.replace(/[^\d+]/g, ""));
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : phone;
+}
+
 export const tierName: Record<Tier, string> = { economy: "Economy", luxury: "Luxury", exotic: "Exotic" };
 
 /** "Fri, Nov 6, 10:00 AM", in the lot's time zone. */

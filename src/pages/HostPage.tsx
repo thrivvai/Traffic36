@@ -1,0 +1,301 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { POLICY } from "../../shared/policy.ts";
+import type { HostBooking, HostDashboard, PaymentMethod, RejectReason } from "../../shared/types.ts";
+import { Icon } from "../components/Icon.tsx";
+import { ProofImage } from "../components/ProofImage.tsx";
+import { StatusPill } from "../components/StatusPill.tsx";
+import { useAccount } from "../lib/account.tsx";
+import type { HostActionBody } from "../lib/api.ts";
+import { formatPhone, formatWhen, money } from "../lib/format.ts";
+import { useSession } from "../lib/session.tsx";
+import { SignInPrompt } from "./TripsPage.tsx";
+
+const METHOD_NAMES: Record<PaymentMethod, string> = { cash_app: "Cash App", chime: "Chime" };
+
+export function HostPage() {
+  const session = useSession();
+  const account = useAccount();
+  const [data, setData] = useState<HostDashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number>(0);
+  const isHost = account.state.status === "ready" && account.state.me.role === "host";
+
+  const load = async () => {
+    try {
+      setData(await account.api.hostDashboard());
+      setError(null);
+      setLoadedAt(Date.now());
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    document.title = "Host | Traffic36";
+  }, []);
+  useEffect(() => {
+    if (!isHost) return;
+    void load();
+    // Fresh numbers whenever the host comes back to this tab, and every minute while it's open.
+    const onFocus = () => document.visibilityState === "visible" && void load();
+    document.addEventListener("visibilitychange", onFocus);
+    const id = setInterval(onFocus, 60_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onFocus);
+      clearInterval(id);
+    };
+  }, [isHost]);
+
+  if (session.status === "signed-out") return <SignInPrompt what="the host console" />;
+  if (account.state.status === "ready" && !isHost) {
+    return (
+      <div className="page empty">
+        <h1>This page is for the host</h1>
+        <Link className="btn btn-ghost" to="/trips">Go to your trips</Link>
+      </div>
+    );
+  }
+  if (!data) {
+    return error ? (
+      <div className="page empty" role="alert">
+        <h1>We couldn't load the host console</h1>
+        <p>{error}</p>
+        <button className="btn btn-ghost" onClick={() => void load()}>Try again</button>
+      </div>
+    ) : (
+      <div className="page narrow" aria-busy="true"><div className="skeleton" style={{ height: 360 }} /></div>
+    );
+  }
+
+  const act = async (code: string, action: "confirm" | "reject" | "cancel" | "deposit", body: HostActionBody) => {
+    setData(await account.api.hostAction(code, action, body));
+  };
+
+  return (
+    <div className="page host">
+      <div className="host-head">
+        <h1 className="page-title">Host console</h1>
+        <button className="btn btn-ghost btn-sm" onClick={() => void load()}>
+          <Icon name="refresh" size={15} />Refresh
+        </button>
+      </div>
+      {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error}</span></div>}
+      <p className="fine left" aria-live="polite">Updated {new Date(loadedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</p>
+
+      <Section title="Payments to check" count={data.review.length} empty="Nothing to check. New payment screenshots show up here.">
+        {data.review.map((b) => <ReviewCard key={b.code} b={b} act={act} />)}
+      </Section>
+
+      <Section title="Deposits to return" count={data.depositsDue.length} empty="No deposits waiting.">
+        {data.depositsDue.map((b) => <DepositCard key={b.code} b={b} act={act} />)}
+      </Section>
+
+      <Section title="Upcoming trips" count={data.upcoming.length} empty="No confirmed trips coming up.">
+        {data.upcoming.map((b) => <MiniRow key={b.code} b={b} />)}
+      </Section>
+
+      <Section title="Holding for payment" count={data.awaitingPayment.length} empty="No one is mid-checkout right now.">
+        {data.awaitingPayment.map((b) => <MiniRow key={b.code} b={b} note={b.holdExpiresAt ? `Hold ends ${new Date(b.holdExpiresAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : undefined} />)}
+      </Section>
+    </div>
+  );
+}
+
+function Section({ title, count, empty, children }: { title: string; count: number; empty: string; children: ReactNode }) {
+  return (
+    <section className="host-sec">
+      <h2>{title} <span className="count">{count}</span></h2>
+      {count === 0 ? <p className="host-empty">{empty}</p> : <div className="host-list">{children}</div>}
+    </section>
+  );
+}
+
+type Act = (code: string, action: "confirm" | "reject" | "cancel" | "deposit", body: HostActionBody) => Promise<void>;
+
+function useAction(act: Act, code: string) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ message: string; field?: string } | null>(null);
+  const run = async (action: Parameters<Act>[1], body: HostActionBody) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await act(code, action, body);
+    } catch (err) {
+      setError({ message: (err as Error).message, field: (err as { field?: string }).field });
+      setBusy(false);
+    }
+  };
+  return { busy, error, run };
+}
+
+function Who({ b }: { b: HostBooking }) {
+  const r = b.renter;
+  return (
+    <dl className="kv">
+      <div><dt>License name</dt><dd>{r.verifiedName ?? "Not verified"}{r.licenseState ? ` · ${r.licenseState}` : ""}{r.licenseLast4 ? ` · ends ${r.licenseLast4}` : ""}</dd></div>
+      <div>
+        <dt>Contact</dt>
+        <dd>
+          {r.phone && <a className="link" href={`sms:${r.phone}`}>{formatPhone(r.phone)}</a>}
+          {r.phone && r.email && " · "}
+          {r.email && <a className="link" href={`mailto:${r.email}`}>{r.email}</a>}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+function ReviewCard({ b, act }: { b: HostBooking; act: Act }) {
+  const [mode, setMode] = useState<"idle" | "confirm" | "reject" | "cancel">("idle");
+  const [seen, setSeen] = useState(false);
+  const [approveDelivery, setApproveDelivery] = useState(false);
+  const [reason, setReason] = useState<RejectReason>("not_received");
+  const [note, setNote] = useState("");
+  const { busy, error, run } = useAction(act, b.code);
+  const proofs = b.proofs.filter((p) => p.status === "pending");
+  const latest = proofs[proofs.length - 1];
+  const method = latest ? METHOD_NAMES[latest.method] : "your";
+  const delivery = b.pickup.kind === "delivery" ? b.pickup.address : null;
+
+  return (
+    <article className="hcard">
+      <div className="hcard-proofs">
+        {proofs.map((p) => <ProofImage key={p.id} url={p.url} alt={`${METHOD_NAMES[p.method]} screenshot from ${p.senderName}`} />)}
+      </div>
+      <div className="hcard-body">
+        <div className="hcard-top">
+          <span className="mono">{b.code}</span>
+          <StatusPill status={b.status} />
+        </div>
+        <div className="hcard-amount">{money(b.totalCents)}<span>by {latest ? METHOD_NAMES[latest.method] : "?"} from <b>{latest?.senderName ?? "?"}</b></span></div>
+        <p className="hcard-trip">{b.vehicle.year} {b.vehicle.make} {b.vehicle.model} · {formatWhen(b.start)} to {formatWhen(b.end)}</p>
+        <Who b={b} />
+        {b.warnings.length > 0 && (
+          <ul className="warns">
+            {b.warnings.map((w) => <li key={w}><Icon name="alert" size={15} />{w}</li>)}
+          </ul>
+        )}
+
+        {mode === "idle" && (
+          <div className="hcard-actions">
+            <button className="btn btn-heat" onClick={() => setMode("confirm")}>Confirm payment</button>
+            <button className="btn btn-ghost" onClick={() => setMode("reject")}>Can't find it</button>
+            <button className="link muted" onClick={() => setMode("cancel")}>Cancel booking</button>
+          </div>
+        )}
+
+        {mode === "confirm" && (
+          <div className="hcard-panel">
+            <label className="check">
+              <input type="checkbox" checked={seen} onChange={(e) => setSeen(e.target.checked)} />
+              <span>I see {money(b.totalCents)} from {latest?.senderName ?? "the renter"} in my {method} account.</span>
+            </label>
+            {delivery && (
+              <label className={`check${error?.field === "approveDelivery" ? " invalid" : ""}`}>
+                <input type="checkbox" checked={approveDelivery} onChange={(e) => setApproveDelivery(e.target.checked)} />
+                <span>I can deliver to {delivery}.</span>
+              </label>
+            )}
+            <div className="hcard-actions">
+              <button className="btn btn-heat" disabled={!seen || (!!delivery && !approveDelivery) || busy} onClick={() => void run("confirm", { approveDelivery })}>
+                {busy ? "Confirming…" : "Confirm booking"}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setMode("idle")} disabled={busy}>Back</button>
+            </div>
+          </div>
+        )}
+
+        {mode === "reject" && (
+          <div className="hcard-panel">
+            <fieldset className="radios">
+              <legend>What's wrong?</legend>
+              {(
+                [
+                  ["not_received", "The money isn't in my account"],
+                  ["wrong_amount", "Wrong amount"],
+                  ["name_mismatch", "Sender doesn't match the license"],
+                  ["other", "Something else"],
+                ] as const
+              ).map(([value, label]) => (
+                <label key={value}><input type="radio" name={`reason-${b.code}`} checked={reason === value} onChange={() => setReason(value)} />{label}</label>
+              ))}
+            </fieldset>
+            <div className={`field${error?.field === "note" ? " invalid" : ""}`}>
+              <label htmlFor={`note-${b.code}`}>Note to the renter {reason === "other" ? "" : "(optional)"}</label>
+              <textarea id={`note-${b.code}`} className="input" rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <p className="fine left">The renter gets a fresh {POLICY.holdMinutes}-minute hold to send it again.</p>
+            <div className="hcard-actions">
+              <button className="btn btn-heat" disabled={busy} onClick={() => void run("reject", { reason, note })}>{busy ? "Sending…" : "Send back to renter"}</button>
+              <button className="btn btn-ghost" onClick={() => setMode("idle")} disabled={busy}>Back</button>
+            </div>
+          </div>
+        )}
+
+        {mode === "cancel" && (
+          <div className="hcard-panel">
+            <div className={`field${error?.field === "note" ? " invalid" : ""}`}>
+              <label htmlFor={`cancel-${b.code}`}>Reason, shown to the renter</label>
+              <textarea id={`cancel-${b.code}`} className="input" rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <p className="fine left">If they paid, send the money back from your {method} account.</p>
+            <div className="hcard-actions">
+              <button className="btn btn-danger" disabled={busy} onClick={() => void run("cancel", { note })}>{busy ? "Cancelling…" : "Cancel booking"}</button>
+              <button className="btn btn-ghost" onClick={() => setMode("idle")} disabled={busy}>Back</button>
+            </div>
+          </div>
+        )}
+
+        {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error.message}</span></div>}
+      </div>
+    </article>
+  );
+}
+
+function DepositCard({ b, act }: { b: HostBooking; act: Act }) {
+  const [amount, setAmount] = useState((b.depositCents / 100).toFixed(2));
+  const [note, setNote] = useState("");
+  const { busy, error, run } = useAction(act, b.code);
+  const cents = Math.round(Number(amount) * 100);
+  const valid = Number.isFinite(cents) && cents >= 0 && cents <= b.depositCents;
+  const keeping = valid && cents < b.depositCents;
+  return (
+    <article className="hcard compact">
+      <div className="hcard-body">
+        <div className="hcard-top"><span className="mono">{b.code}</span><span className="fine">Ended {formatWhen(b.end)}</span></div>
+        <p className="hcard-trip">{b.renter.verifiedName ?? b.renter.accountName} · {b.vehicle.make} {b.vehicle.model} · paid by {b.paymentMethod ? METHOD_NAMES[b.paymentMethod] : "?"}</p>
+        <div className="deposit-row">
+          <div className={`field${error?.field === "refundCents" ? " invalid" : ""}`}>
+            <label htmlFor={`dep-${b.code}`}>Amount sent back</label>
+            <input id={`dep-${b.code}`} className="input" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} />
+          </div>
+          {keeping && (
+            <div className={`field grow${error?.field === "note" ? " invalid" : ""}`}>
+              <label htmlFor={`depnote-${b.code}`}>What the {money(b.depositCents - cents)} kept covers</label>
+              <input id={`depnote-${b.code}`} className="input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Fuel, cleaning, late return…" />
+            </div>
+          )}
+        </div>
+        <div className="hcard-actions">
+          <button className="btn btn-heat" disabled={!valid || busy} onClick={() => void run("deposit", { refundCents: cents, note })}>
+            {busy ? "Saving…" : `Mark ${valid ? money(cents) : ""} returned`}
+          </button>
+        </div>
+        {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error.message}</span></div>}
+      </div>
+    </article>
+  );
+}
+
+function MiniRow({ b, note }: { b: HostBooking; note?: string }) {
+  return (
+    <div className="minirow">
+      <span className="mono">{b.code}</span>
+      <span>{b.renter.verifiedName ?? b.renter.accountName}</span>
+      <span>{b.vehicle.make} {b.vehicle.model}</span>
+      <span>{formatWhen(b.start)}</span>
+      <span className="fine">{note ?? (b.pickup.kind === "delivery" ? "Delivery" : b.pickup.location.name)}</span>
+    </div>
+  );
+}
