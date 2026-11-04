@@ -130,7 +130,7 @@ async function applyResult(db: Db, user: UserRecord, result: IdentityResult, now
 
 /** Asks Stripe for the latest on a renter's open check and saves it. Safe to call repeatedly. */
 export async function refreshIdentity(db: Db, provider: IdentityProvider, user: UserRecord, now: Date): Promise<UserRecord> {
-  if (!user.identitySessionId || user.identityStatus === "verified") return user;
+  if (!user.identitySessionId || user.identityMethod === "manual" || user.identityStatus === "verified") return user;
   return applyResult(db, user, await provider.retrieve(user.identitySessionId), now);
 }
 
@@ -169,7 +169,7 @@ export async function startIdentity(
     idempotencyKey: `identity:${user.id}:${user.identitySessionId ?? "first"}:${user.identityAttempts}`,
   });
   await db.query(
-    `UPDATE users SET identity_session_id = $2, identity_status = 'pending', identity_failure_reason = NULL,
+    `UPDATE users SET identity_session_id = $2, identity_status = 'pending', identity_method = 'stripe', identity_failure_reason = NULL,
        identity_attempts = identity_attempts + 1 WHERE id = $1`,
     [user.id, session.id],
   );

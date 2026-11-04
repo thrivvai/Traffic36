@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { POLICY } from "../../shared/policy.ts";
 import type { Me, Quote, VehicleDetail } from "../../shared/types.ts";
 import { Icon } from "../components/Icon.tsx";
+import { LicenseForm } from "../components/LicenseForm.tsx";
 import { TripCard } from "../components/TripCard.tsx";
 import { useAccount } from "../lib/account.tsx";
 import { api, RequestError } from "../lib/api.ts";
@@ -70,7 +71,8 @@ function Checkout({ vehicle, quote, trip }: { vehicle: VehicleDetail; quote: Quo
   const session = useSession();
   const account = useAccount();
   const me = account.state.status === "ready" ? account.state.me : null;
-  const verified = me?.identity.status === "verified";
+  // A hand-reviewed license that's waiting for the host is enough to hold dates and pay.
+  const verified = me?.identity.status === "verified" || me?.identity.status === "in_review";
   const signedIn = session.status === "signed-in";
   const changeLink = `/cars/${vehicle.slug}${tripSearch(trip)}`;
 
@@ -152,6 +154,55 @@ function AccountStep({ me }: { me: Me | null }) {
 }
 
 function LicenseStep({ me, minAge }: { me: Me; minAge: number }) {
+  const account = useAccount();
+  const manual = account.state.status === "ready" && account.state.idCheck === "manual";
+  return manual ? <ManualLicenseStep me={me} minAge={minAge} /> : <StripeLicenseStep me={me} minAge={minAge} />;
+}
+
+const longDate = (ymd: string) => new Date(`${ymd}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+function ManualLicenseStep({ me, minAge }: { me: Me; minAge: number }) {
+  const id = me.identity;
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [id.status]);
+
+  if (id.status === "verified") {
+    return (
+      <p className="flow-text done-text">
+        License approved{id.licenseState ? ` (${id.licenseState})` : ""}{id.licenseExpiresOn ? `, valid through ${longDate(id.licenseExpiresOn)}` : ""}.
+      </p>
+    );
+  }
+  if (id.status === "in_review" && !editing) {
+    return (
+      <>
+        <p className="flow-text done-text">
+          License sent for {id.name ?? "you"}. We check it by hand along with your payment, so you can book now.
+        </p>
+        <button className="link muted" onClick={() => setEditing(true)}>Fix a photo or detail</button>
+      </>
+    );
+  }
+  return (
+    <>
+      {id.status === "failed" && (
+        <div className="note bad" role="alert">
+          <Icon name="alert" size={16} />
+          <span><b>We couldn't approve your license.</b> {id.failureReason}</span>
+        </div>
+      )}
+      {id.status === "expired" && (
+        <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>The license on your account has expired. Send your current one.</span></div>
+      )}
+      <p className="flow-text">
+        Take three quick photos: the front and back of your driver's license, and a selfie holding it. Drivers for this car must be {minAge} or older.
+      </p>
+      <LicenseForm me={me} />
+    </>
+  );
+}
+
+function StripeLicenseStep({ me, minAge }: { me: Me; minAge: number }) {
   const account = useAccount();
   const location = useLocation();
   const navigate = useNavigate();

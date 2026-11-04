@@ -331,14 +331,17 @@ function CancelUnpaid({ booking, onChange }: { booking: Booking; onChange: (b: B
 }
 
 function ReviewPanel({ booking, onChange }: { booking: Booking; onChange: (b: Booking) => void }) {
+  const account = useAccount();
+  const identity = account.state.status === "ready" ? account.state.me.identity : null;
+  const licenseInReview = identity?.status === "in_review";
   const [adding, setAdding] = useState(false);
   const [method, setMethod] = useState<PaymentMethod>(booking.paymentMethod ?? "cash_app");
   const pending = booking.proofs.filter((p) => p.status === "pending");
   return (
     <Panel icon="clock" title="We're checking your payment" tone="warn">
       <p>
-        Your dates are blocked for you while we confirm {money(booking.totalCents)} arrived in our {booking.paymentMethod ? METHOD_NAMES[booking.paymentMethod] : ""} account.
-        This page updates by itself once it's confirmed.
+        Your dates are blocked for you while we confirm {money(booking.totalCents)} arrived in our {booking.paymentMethod ? METHOD_NAMES[booking.paymentMethod] : ""} account
+        {licenseInReview ? " and check your license" : ""}. This page updates by itself once it's confirmed.
       </p>
       <div className="proofs">
         {pending.map((p) => (
@@ -348,6 +351,12 @@ function ReviewPanel({ booking, onChange }: { booking: Booking; onChange: (b: Bo
           </figure>
         ))}
       </div>
+      {identity?.status === "failed" && (
+        <div className="note bad" role="alert">
+          <Icon name="alert" size={16} />
+          <span><b>We need new license photos.</b> {identity.failureReason} <Link className="link" to="/license">Send them again</Link></span>
+        </div>
+      )}
       {adding ? (
         <ProofForm booking={booking} method={method} setMethod={setMethod} onDone={(b) => { setAdding(false); onChange(b); }} compact />
       ) : (

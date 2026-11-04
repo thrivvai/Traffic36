@@ -2,14 +2,15 @@ import { getStore } from "@netlify/blobs";
 
 export type ImageType = "image/jpeg" | "image/png" | "image/webp";
 
-/** Where payment screenshots are kept. Private: only the API reads them, after checking who's asking. */
+/** Where private images are kept. Only the API reads them, after checking who's asking. */
 export interface ProofStore {
   put(key: string, data: ArrayBuffer, contentType: ImageType): Promise<void>;
   get(key: string): Promise<{ data: ArrayBuffer; contentType: string } | null>;
 }
 
-export function blobProofStore(): ProofStore {
-  const store = () => getStore({ name: "payment-proofs", consistency: "strong" });
+/** A private image store in Netlify Blobs. Payment screenshots and license photos each get their own. */
+export function blobImageStore(name: "payment-proofs" | "identity-documents"): ProofStore {
+  const store = () => getStore({ name, consistency: "strong" });
   return {
     async put(key, data, contentType) {
       await store().set(key, data, { metadata: { contentType } });
@@ -35,3 +36,6 @@ export function sniffImage(bytes: Uint8Array): ImageType | null {
   if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
   return null;
 }
+
+export const blobProofStore = () => blobImageStore("payment-proofs");
+export const blobIdentityStore = () => blobImageStore("identity-documents");

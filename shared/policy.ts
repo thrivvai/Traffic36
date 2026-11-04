@@ -25,8 +25,12 @@ export const POLICY = {
   maxProofsPerBooking: 5,
   maxProofBytes: 5 * 1024 * 1024,
 
-  /** License checks a renter can start before they have to contact the host. Each completed check costs about $1.50. */
+  /** Stripe license checks a renter can start before they have to contact the host. Each completed check costs about $1.50. */
   maxIdentityAttempts: 5,
+
+  /** Hand-reviewed license photos: the largest one accepted, and how many a renter can upload in a day. */
+  maxIdPhotoBytes: 3 * 1024 * 1024,
+  maxIdUploadsPerDay: 30,
 
   /**
    * The rental agreement renters accept at checkout. Bump the version whenever the text changes.

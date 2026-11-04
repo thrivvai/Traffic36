@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { POLICY } from "../../shared/policy.ts";
-import type { HostBooking, HostDashboard, PaymentMethod, RejectReason } from "../../shared/types.ts";
+import type { HostBooking, HostDashboard, IdDocumentKind, LicenseReview, PaymentMethod, RejectReason } from "../../shared/types.ts";
+import { US_LICENSE_STATES } from "../../shared/usStates.ts";
 import { Icon } from "../components/Icon.tsx";
 import { ProofImage } from "../components/ProofImage.tsx";
 import { StatusPill } from "../components/StatusPill.tsx";
@@ -82,6 +83,10 @@ export function HostPage() {
       </div>
       {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error}</span></div>}
       <p className="fine left" aria-live="polite">Updated {new Date(loadedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</p>
+
+      <Section title="Licenses to review" count={data.licenses.length} empty="No licenses waiting. New ones show up here.">
+        {data.licenses.map((l) => <LicenseCard key={l.userId} l={l} onDone={setData} />)}
+      </Section>
 
       <Section title="Payments to check" count={data.review.length} empty="Nothing to check. New payment screenshots show up here.">
         {data.review.map((b) => <ReviewCard key={b.code} b={b} act={act} />)}
@@ -179,7 +184,7 @@ function ReviewCard({ b, act }: { b: HostBooking; act: Act }) {
 
         {mode === "idle" && (
           <div className="hcard-actions">
-            <button className="btn btn-heat" onClick={() => setMode("confirm")}>Confirm payment</button>
+            <button className="btn btn-heat" onClick={() => setMode("confirm")} disabled={!b.renter.licenseApproved}>Confirm payment</button>
             <button className="btn btn-ghost" onClick={() => setMode("reject")}>Can't find it</button>
             <button className="link muted" onClick={() => setMode("cancel")}>Cancel booking</button>
           </div>
@@ -247,6 +252,135 @@ function ReviewCard({ b, act }: { b: HostBooking; act: Act }) {
           </div>
         )}
 
+        {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error.message}</span></div>}
+      </div>
+    </article>
+  );
+}
+
+const DOC_LABELS: Record<IdDocumentKind, string> = { license_front: "Front", license_back: "Back", selfie: "Selfie" };
+
+const REJECT_PRESETS = [
+  "A photo is blurry. Retake it in bright light and hold still.",
+  "Glare covers part of the license. Tilt it away from the light and retake it.",
+  "The selfie doesn't clearly show your face next to the license.",
+  "The details you typed don't match the license.",
+  "The license is expired or damaged. Send a current, undamaged license.",
+];
+
+function LicenseCard({ l, onDone }: { l: LicenseReview; onDone: (d: HostDashboard) => void }) {
+  const account = useAccount();
+  const [form, setForm] = useState({ legalName: l.legalName, dob: l.dob, licenseState: l.licenseState, licenseExpiresOn: l.licenseExpiresOn, licenseLast4: "" });
+  const [checks, setChecks] = useState([false, false, false]);
+  const [mode, setMode] = useState<"review" | "reject">("review");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ message: string; field?: string } | null>(null);
+  const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const run = async (action: "approve" | "reject") => {
+    setBusy(true);
+    setError(null);
+    try {
+      onDone(await account.api.hostLicense(l.userId, action, action === "approve" ? form : { reason }));
+    } catch (err) {
+      setError({ message: (err as Error).message, field: (err as { field?: string }).field });
+      setBusy(false);
+    }
+  };
+  const invalid = (f: string) => `field${error?.field === f ? " invalid" : ""}`;
+  const checkLabels = [
+    "The name, birth date, state and expiry above match the license.",
+    "The license looks real: not expired, damaged, edited or a photo of a screen.",
+    "The face in the selfie matches the license photo.",
+  ];
+
+  return (
+    <article className="hcard license">
+      <div className="lic-photos">
+        {l.documents.map((d) => (
+          <figure key={d.kind}>
+            <ProofImage url={d.url} alt={`${DOC_LABELS[d.kind]} of ${l.legalName}'s license`} />
+            <figcaption>{DOC_LABELS[d.kind]}</figcaption>
+          </figure>
+        ))}
+      </div>
+      <div className="hcard-body">
+        <div className="hcard-top">
+          <span>Sent {formatWhen(l.submittedAt)}</span>
+          {l.previousRejections > 0 && <span className="status warn">Rejected {l.previousRejections}x before</span>}
+        </div>
+        <div className="hcard-amount lic-name">{l.legalName}<span>age {l.age} · account “{l.accountName}”</span></div>
+        <dl className="kv">
+          <div>
+            <dt>Contact</dt>
+            <dd>
+              {l.phone && <a className="link" href={`sms:${l.phone}`}>{formatPhone(l.phone)}</a>}
+              {l.phone && l.email && " · "}
+              {l.email && <a className="link" href={`mailto:${l.email}`}>{l.email}</a>}
+            </dd>
+          </div>
+          {l.openBookings.length > 0 && <div><dt>Trips waiting</dt><dd className="mono">{l.openBookings.join(", ")}</dd></div>}
+        </dl>
+
+        {mode === "review" ? (
+          <div className="hcard-panel">
+            <p className="fine left">Compare with the photos. Fix any typo before approving; the corrected details are what the booking rules use.</p>
+            <div className="lic-grid">
+              <div className={`${invalid("legalName")} span2`}>
+                <label htmlFor={`ln-${l.userId}`}>Legal name</label>
+                <input id={`ln-${l.userId}`} className="input" value={form.legalName} onChange={set("legalName")} />
+              </div>
+              <div className={invalid("dob")}>
+                <label htmlFor={`dob-${l.userId}`}>Date of birth</label>
+                <input id={`dob-${l.userId}`} className="input" type="date" value={form.dob} onChange={set("dob")} />
+              </div>
+              <div className={invalid("licenseExpiresOn")}>
+                <label htmlFor={`exp-${l.userId}`}>Expires</label>
+                <input id={`exp-${l.userId}`} className="input" type="date" value={form.licenseExpiresOn} onChange={set("licenseExpiresOn")} />
+              </div>
+              <div className={invalid("licenseState")}>
+                <label htmlFor={`st-${l.userId}`}>State</label>
+                <select id={`st-${l.userId}`} className="select" value={form.licenseState} onChange={set("licenseState")}>
+                  {Object.entries(US_LICENSE_STATES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                </select>
+              </div>
+              <div className={invalid("licenseLast4")}>
+                <label htmlFor={`l4-${l.userId}`}>License no. last 4 (optional)</label>
+                <input id={`l4-${l.userId}`} className="input mono" maxLength={4} value={form.licenseLast4} onChange={set("licenseLast4")} />
+              </div>
+            </div>
+            {checkLabels.map((label, i) => (
+              <label className="check" key={label}>
+                <input type="checkbox" checked={checks[i]} onChange={(e) => setChecks((c) => c.map((v, j) => (j === i ? e.target.checked : v)))} />
+                <span>{label}</span>
+              </label>
+            ))}
+            <div className="hcard-actions">
+              <button className="btn btn-heat" disabled={!checks.every(Boolean) || busy} onClick={() => void run("approve")}>
+                {busy ? "Approving…" : "Approve license"}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setMode("reject")} disabled={busy}>Ask for new photos</button>
+            </div>
+          </div>
+        ) : (
+          <div className="hcard-panel">
+            <fieldset className="radios">
+              <legend>What should they fix?</legend>
+              {REJECT_PRESETS.map((p) => (
+                <label key={p}><input type="radio" name={`lr-${l.userId}`} checked={reason === p} onChange={() => setReason(p)} />{p}</label>
+              ))}
+            </fieldset>
+            <div className={invalid("reason")}>
+              <label htmlFor={`rs-${l.userId}`}>Message to the renter</label>
+              <textarea id={`rs-${l.userId}`} className="input" rows={2} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
+            </div>
+            <p className="fine left">If they already paid for a trip and can't fix this, cancel the booking and send their money back.</p>
+            <div className="hcard-actions">
+              <button className="btn btn-heat" disabled={busy} onClick={() => void run("reject")}>{busy ? "Sending…" : "Send to renter"}</button>
+              <button className="btn btn-ghost" onClick={() => setMode("review")} disabled={busy}>Back</button>
+            </div>
+          </div>
+        )}
         {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error.message}</span></div>}
       </div>
     </article>

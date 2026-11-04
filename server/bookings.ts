@@ -5,9 +5,10 @@ import { HttpError, badRequest, notFound } from "./http.ts";
 import { findConflicts, lockVehicle } from "./availability.ts";
 import { priceTrip, type TripInput } from "./quote.ts";
 import { sniffImage, type ProofStore } from "./proofs.ts";
-import { licenseValid, type UserRecord } from "./users.ts";
+import { canBook, licenseCurrent, type UserRecord } from "./users.ts";
+import { pendingLicenses } from "./licenseReview.ts";
 import { MINUTE, POLICY } from "../shared/policy.ts";
-import { ageAt, formatMoney } from "../shared/pricing.ts";
+import { ageAt, formatMoney, validThrough } from "../shared/pricing.ts";
 import type {
   Booking,
   BookingStatus,
@@ -89,6 +90,9 @@ type Row = {
   r_phone: string | null;
   r_state: string | null;
   r_last4: string | null;
+  r_identity: string;
+  r_dob: string | null;
+  r_expires: string | null;
 };
 
 const loc = (alias: string) => `json_build_object(
@@ -106,7 +110,8 @@ const SELECT = `
          CASE WHEN pl.id IS NULL THEN NULL ELSE ${loc("pl")} END AS pickup_loc,
          ${loc("rl")} AS return_loc,
          u.name AS r_name, u.identity_name AS r_verified, u.email AS r_email, u.phone AS r_phone,
-         u.license_state AS r_state, u.license_last4 AS r_last4
+         u.license_state AS r_state, u.license_last4 AS r_last4, u.identity_status AS r_identity,
+         u.identity_dob::text AS r_dob, u.license_expires_on::text AS r_expires
     FROM bookings b
     JOIN vehicles v ON v.id = b.vehicle_id
     LEFT JOIN lots pl ON pl.id = b.pickup_lot_id
@@ -191,6 +196,9 @@ export function namesMatch(sender: string, verified: string): boolean {
 
 function warningsFor(r: Row, proofs: ProofRow[], now: Date): string[] {
   const out: string[] = [];
+  if (r.r_identity !== "verified" && (r.status === "payment_review" || r.status === "awaiting_payment")) {
+    out.push("This renter's license isn't approved yet. Review it under Licenses to review before confirming.");
+  }
   const pending = proofs.filter((p) => p.status === "pending");
   const latest = pending[pending.length - 1];
   if (latest && r.r_verified && !namesMatch(latest.sender_name, r.r_verified)) {
@@ -217,6 +225,7 @@ function toHostBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date
       phone: r.r_phone,
       licenseState: r.r_state,
       licenseLast4: r.r_last4,
+      licenseApproved: r.r_identity === "verified",
     },
     warnings: warningsFor(r, proofs, now),
     refundedCents: r.refunded_cents,
@@ -276,14 +285,14 @@ export async function createBooking(
 
   const trip = await priceTrip(db, slug, input, now);
 
-  if (user.identityStatus !== "verified" || !user.identityDob) {
-    throw new HttpError(403, "Verify your driver's license before booking.", "identity");
+  if (!canBook(user)) {
+    throw new HttpError(403, "Add your driver's license before booking.", "identity");
   }
-  if (!licenseValid(user, trip.end)) {
-    throw new HttpError(403, "Your license expires before this trip ends. Verify a current license to book these dates.", "identity");
+  if (!licenseCurrent(user, trip.end)) {
+    throw new HttpError(403, "Your license expires before this trip ends. Add a current license to book these dates.", "identity");
   }
   const minAge = Math.max(trip.vehicle.minDriverAge, POLICY.minAgeFloor);
-  if (ageAt(user.identityDob, trip.start.getTime(), POLICY.timeZone) < minAge) {
+  if (ageAt(user.identityDob!, trip.start.getTime(), POLICY.timeZone) < minAge) {
     throw new HttpError(403, `Drivers for this car must be ${minAge} or older on the pickup date.`, "identity");
   }
 
@@ -461,13 +470,14 @@ export async function hostDashboard(db: Db, cfg: PaymentConfig, now: Date) {
     const proofs = await proofsFor(db, rows);
     return rows.map((r) => toHostBooking(r, proofs.get(r.id) ?? [], cfg, now));
   };
-  const [review, awaitingPayment, upcoming, depositsDue] = await Promise.all([
+  const [licenses, review, awaitingPayment, upcoming, depositsDue] = await Promise.all([
+    pendingLicenses(db, now),
     list(`b.status = 'payment_review'`, `b.starts_at`),
     list(`b.status = 'awaiting_payment' AND b.hold_expires_at > $1`, `b.hold_expires_at`, [now]),
     list(`b.status IN ('confirmed', 'active') AND b.ends_at > $1`, `b.starts_at`, [now]),
     list(`b.status IN ('confirmed', 'active', 'returned') AND b.ends_at <= $1`, `b.ends_at`, [now]),
   ]);
-  return { review, awaitingPayment, upcoming, depositsDue };
+  return { licenses, review, awaitingPayment, upcoming, depositsDue };
 }
 
 async function hostRow(tx: Db, code: string): Promise<Row> {
@@ -509,6 +519,17 @@ export async function confirmPayment(
     if (row.status !== "payment_review") throw new HttpError(409, "This booking isn't waiting for a payment check.");
     if (row.delivery_address && input.approveDelivery !== true) {
       throw badRequest("Approve the delivery address to confirm this booking.", "approveDelivery");
+    }
+    // The license as approved, not as typed at checkout: the host may have corrected it.
+    if (row.r_identity !== "verified" || !row.r_dob || !row.r_expires) {
+      throw new HttpError(409, "Approve this renter's license first. It's under Licenses to review.");
+    }
+    if (!validThrough(row.r_expires, row.ends_at.getTime(), POLICY.timeZone)) {
+      throw new HttpError(409, "The renter's license expires before this trip ends. Reject the payment and send the money back.");
+    }
+    const minAge = Math.max(row.v_min_age, POLICY.minAgeFloor);
+    if (ageAt(row.r_dob, row.starts_at.getTime(), POLICY.timeZone) < minAge) {
+      throw new HttpError(409, `The approved license shows the renter is under ${minAge}, the minimum for this car. Reject the payment and send the money back.`);
     }
     const conflicts = await findConflicts(tx, row.vehicle_id, row.starts_at, row.ends_at, { now, ignoreBookingId: row.id });
     if (conflicts.length) {

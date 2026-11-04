@@ -12,7 +12,7 @@ Car rental web app: renters browse, price and book cars; the host runs the fleet
 | API | Netlify Functions (`netlify/functions`) |
 | Database | Netlify Database (managed Postgres). Migrations in `netlify/database/migrations` run on every deploy |
 | Sign-in | Clerk (email or phone code, passkeys; no passwords) |
-| License checks | Stripe Identity: driver's license plus selfie |
+| License checks | Reviewed by the host from three photos (license front, back, selfie holding it). Stripe Identity is built and switched off; set `ID_CHECK=stripe` to use it |
 | Payments | Cash App and Chime. Renters upload a screenshot; the host confirms the money arrived |
 | Files | Netlify Blobs (payment screenshots, private) |
 | Coming next | Seam lockboxes, Twilio, Resend email, card payments on a Traffic36 Stripe account |
@@ -51,17 +51,18 @@ Every setting is listed in `.env.example`. In Netlify, add them under **Project 
 |---|---|
 | `VITE_CLERK_PUBLISHABLE_KEY` | Sign-in screens (public) |
 | `CLERK_SECRET_KEY` | Checking who's signed in |
-| `STRIPE_SECRET_KEY` | A **restricted** key for license checks (see `.env.example` for its permissions) |
-| `STRIPE_WEBHOOK_SECRET` | Verifies Stripe's license-check webhooks |
+| `ID_CHECK` | Leave unset for hand-reviewed licenses; `stripe` switches to Stripe Identity |
+| `STRIPE_SECRET_KEY` | Only with `ID_CHECK=stripe`: a **restricted** key (see `.env.example` for its permissions) |
+| `STRIPE_WEBHOOK_SECRET` | Only with `ID_CHECK=stripe`: verifies Stripe's webhooks |
 | `CASHAPP_CASHTAG`, `CHIME_PHONE` | Where renters pay. Kept out of the code on purpose |
 | `HOST_EMAILS` | Who gets the host console |
 
 ## How checkout works
 
-1. The renter signs in, verifies their driver's license with Stripe, and accepts the rental agreement.
+1. The renter signs in, sends their driver's license (three photos plus the details printed on it), and accepts the rental agreement. They can book while the license waits for review; age and expiry rules run on the typed details.
 2. The dates are held for 30 minutes (`awaiting_payment`) while they pay by Cash App or Chime.
 3. They upload a screenshot (`payment_review`). The dates stay blocked until the host decides.
-4. The host checks the money actually arrived, then confirms (`confirmed`) or sends it back with a note and a fresh hold.
+4. The host approves the license (correcting any typo against the photos), checks the money actually arrived, then confirms (`confirmed`) or sends it back with a note and a fresh hold. A booking can't be confirmed until the license is approved, and the rules run again on the approved details.
 5. After the trip, the host returns the deposit and the booking closes.
 
 A screenshot never confirms a booking on its own. Age, license expiry, availability and price are all checked on the server.
@@ -81,3 +82,4 @@ Every value that needs a real answer is marked in code:
 - Minimum driver ages per car wait on Roamly.
 - The rental agreement (`src/pages/AgreementPage.tsx`) is a draft for a lawyer to review. Bump `POLICY.agreementVersion` when it changes.
 - Emails queue in the `outbox` table until an email provider (Resend) is connected.
+- License photos are kept indefinitely for now. DECISION: how long to keep them after a renter's last trip, then add a cleanup job.

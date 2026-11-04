@@ -68,8 +68,33 @@ export type Quote = {
 
 export type ApiError = { error: string; field?: string };
 
-/** The signed-in user. "expired" means a license was verified but has since expired. */
-export type IdentityState = "none" | "pending" | "verified" | "failed" | "expired";
+/**
+ * Where the renter's license check stands.
+ *   pending    a Stripe check was started and isn't finished
+ *   in_review  photos sent; the host hasn't reviewed them yet (the renter can still book and pay)
+ *   expired    a license was verified but has since expired
+ */
+export type IdentityState = "none" | "pending" | "in_review" | "verified" | "failed" | "expired";
+
+/** How licenses are checked right now: by the host from photos, or by Stripe. */
+export type IdCheckMode = "manual" | "stripe";
+
+export type IdDocumentKind = "license_front" | "license_back" | "selfie";
+
+export type LicenseDetails = { legalName: string; dob: string; licenseState: string; licenseExpiresOn: string };
+
+/** A license waiting for the host, with everything needed to compare the photos to the typed details. */
+export type LicenseReview = LicenseDetails & {
+  userId: string;
+  submittedAt: string;
+  accountName: string;
+  email: string | null;
+  phone: string | null;
+  age: number;
+  documents: { kind: IdDocumentKind; url: string }[];
+  openBookings: string[];
+  previousRejections: number;
+};
 
 export type Me = {
   name: string;
@@ -78,6 +103,9 @@ export type Me = {
   role: "renter" | "host";
   identity: {
     status: IdentityState;
+    method: IdCheckMode | null;
+    /** The legal name on the license, once it's been sent in. */
+    name: string | null;
     licenseState: string | null;
     licenseLast4: string | null;
     licenseExpiresOn: string | null;
@@ -157,6 +185,7 @@ export type HostBooking = Booking & {
     phone: string | null;
     licenseState: string | null;
     licenseLast4: string | null;
+    licenseApproved: boolean;
   };
   /** Things to look at before confirming, in plain words. */
   warnings: string[];
@@ -164,6 +193,7 @@ export type HostBooking = Booking & {
 };
 
 export type HostDashboard = {
+  licenses: LicenseReview[];
   review: HostBooking[];
   awaitingPayment: HostBooking[];
   upcoming: HostBooking[];

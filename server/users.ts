@@ -16,6 +16,8 @@ export type UserRecord = {
   email: string | null;
   phone: string | null;
   identityStatus: IdentityStatus;
+  /** How the license was (or is being) checked: reviewed by the host, or by Stripe. */
+  identityMethod: "manual" | "stripe" | null;
   identitySessionId: string | null;
   identityName: string | null;
   identityDob: string | null;
@@ -29,7 +31,7 @@ export type UserRecord = {
 
 export const USER_COLUMNS = `
   id, clerk_user_id AS "clerkUserId", role, name, email, phone,
-  identity_status AS "identityStatus", identity_session_id AS "identitySessionId", identity_name AS "identityName",
+  identity_status AS "identityStatus", identity_method AS "identityMethod", identity_session_id AS "identitySessionId", identity_name AS "identityName",
   identity_dob::text AS "identityDob", license_expires_on::text AS "licenseExpiresOn",
   license_state AS "licenseState", license_last4 AS "licenseLast4",
   identity_failure_reason AS "identityFailureReason", identity_attempts AS "identityAttempts",
@@ -91,23 +93,40 @@ export async function requireHost(req: Request, deps: AuthDeps): Promise<UserRec
 
 /** True when the renter's license check is done and the license is still valid on `at`. */
 export function licenseValid(user: UserRecord, at: Date): boolean {
+  return user.identityStatus === "verified" && licenseCurrent(user, at);
+}
+
+/** True when the expiry date on file (verified or not) is still good on `at`. */
+export function licenseCurrent(user: UserRecord, at: Date): boolean {
+  return !!user.licenseExpiresOn && validThrough(user.licenseExpiresOn, at.getTime(), POLICY.timeZone);
+}
+
+/**
+ * Can this renter hold dates? Yes once their license is approved, and also while a hand-reviewed
+ * license is waiting for the host: the host approves it together with the payment, and a booking
+ * can't be confirmed before that.
+ */
+export function canBook(user: UserRecord): boolean {
   return (
-    user.identityStatus === "verified" &&
+    !!user.identityDob &&
     !!user.licenseExpiresOn &&
-    validThrough(user.licenseExpiresOn, at.getTime(), POLICY.timeZone)
+    (user.identityStatus === "verified" || (user.identityStatus === "pending" && user.identityMethod === "manual"))
   );
 }
 
 /** What the browser is allowed to know about the signed-in user. Date of birth never leaves the server. */
 export function publicMe(user: UserRecord, now: Date): Me {
   const expired = user.identityStatus === "verified" && !licenseValid(user, now);
+  const inReview = user.identityStatus === "pending" && user.identityMethod === "manual";
   return {
     name: user.identityName ?? user.name,
     email: user.email,
     phone: user.phone,
     role: user.role,
     identity: {
-      status: expired ? "expired" : user.identityStatus,
+      status: expired ? "expired" : inReview ? "in_review" : user.identityStatus,
+      method: user.identityMethod,
+      name: user.identityName,
       licenseState: user.licenseState,
       licenseLast4: user.licenseLast4,
       licenseExpiresOn: user.licenseExpiresOn,

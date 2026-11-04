@@ -19,6 +19,7 @@ import {
 } from "./bookings.ts";
 import { HttpError, badRequest, json, readJson, route } from "./http.ts";
 import { identityWebhook, refreshIdentity, startIdentity } from "./identity.ts";
+import { approveLicense, readIdDocument, rejectLicense, submitLicense, uploadIdDocument } from "./licenseReview.ts";
 import type { Services } from "./services.ts";
 import { publicMe, requireHost, requireUser } from "./users.ts";
 
@@ -32,14 +33,68 @@ export const meHandler = (get: Get) =>
     const s = get();
     const sync = new URL(req.url).searchParams.get("sync") === "1";
     let user = await requireUser(req, deps(s), { refresh: sync });
-    if (user.identityStatus === "pending") user = await refreshIdentity(s.db, s.identity, user, s.now());
-    return json({ me: publicMe(user, s.now()), paymentMethods: enabledMethods(s.payments) });
+    if (user.identityStatus === "pending" && user.identityMethod === "stripe") user = await refreshIdentity(s.db, s.identity, user, s.now());
+    return json({ me: publicMe(user, s.now()), paymentMethods: enabledMethods(s.payments), idCheck: s.idCheck });
+  });
+
+/** POST /api/identity/documents, multipart: kind (license_front, license_back or selfie) and file. */
+export const idDocumentUploadHandler = (get: Get) =>
+  route(["POST"], async (req) => {
+    const s = get();
+    const user = await requireUser(req, deps(s));
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch {
+      throw badRequest("We couldn't read that upload. Try again.");
+    }
+    return json(await uploadIdDocument(s.db, s.idDocuments, user, { kind: form.get("kind"), file: form.get("file") }, s.now()), { status: 201 });
+  });
+
+/** POST /api/identity/submit { legalName, dob, licenseState, licenseExpiresOn, documents: { license_front, license_back, selfie } } */
+export const licenseSubmitHandler = (get: Get) =>
+  route(["POST"], async (req) => {
+    const s = get();
+    if (s.idCheck !== "manual") throw new HttpError(409, "License checks run through Stripe right now. Refresh the page.");
+    const user = await requireUser(req, deps(s));
+    await submitLicense(s.db, user, await readJson(req), s.hostEmails, s.now());
+    const updated = await requireUser(req, deps(s));
+    return json({ me: publicMe(updated, s.now()) }, { status: 201 });
+  });
+
+/** GET /api/identity/documents/:id returns a license photo, to the host only. */
+export const idDocumentImageHandler = (get: Get) =>
+  route(["GET"], async (req, params) => {
+    const s = get();
+    const user = await requireUser(req, deps(s));
+    const doc = await readIdDocument(s.db, s.idDocuments, user, params.id ?? "");
+    return new Response(doc.data, {
+      headers: {
+        "content-type": doc.contentType,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'",
+      },
+    });
+  });
+
+/** POST /api/host/licenses/:userId/:action where action is approve (with corrected details) or reject (with a reason). */
+export const hostLicenseHandler = (get: Get) =>
+  route(["POST"], async (req, params) => {
+    const s = get();
+    const host = await requireHost(req, deps(s));
+    const body = await readJson(req);
+    if (params.action === "approve") await approveLicense(s.db, host, params.userId ?? "", body, s.now());
+    else if (params.action === "reject") await rejectLicense(s.db, host, params.userId ?? "", body, s.now());
+    else throw new HttpError(404, "Unknown action.");
+    return json({ dashboard: await hostDashboard(s.db, s.payments, s.now()) });
   });
 
 /** POST /api/identity/start { returnPath } -> { url } to send the renter to Stripe, or { done: true }. */
 export const identityStartHandler = (get: Get) =>
   route(["POST"], async (req) => {
     const s = get();
+    if (s.idCheck !== "stripe") throw new HttpError(409, "Licenses are checked from photos right now. Refresh the page.");
     const user = await requireUser(req, deps(s));
     const body = await readJson(req);
     const path = typeof body.returnPath === "string" ? body.returnPath : "/";

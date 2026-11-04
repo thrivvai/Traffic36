@@ -3,6 +3,9 @@ import type {
   Booking,
   CreateBookingRequest,
   HostDashboard,
+  IdCheckMode,
+  IdDocumentKind,
+  LicenseDetails,
   Location,
   Me,
   PaymentMethod,
@@ -68,7 +71,17 @@ export function accountApi(getToken: TokenSource) {
   const enc = encodeURIComponent;
   return {
     me: (opts: { sync?: boolean; signal?: AbortSignal } = {}) =>
-      call<{ me: Me; paymentMethods: PaymentMethod[] }>(`/api/me${opts.sync ? "?sync=1" : ""}`, { signal: opts.signal }),
+      call<{ me: Me; paymentMethods: PaymentMethod[]; idCheck: IdCheckMode }>(`/api/me${opts.sync ? "?sync=1" : ""}`, { signal: opts.signal }),
+    uploadIdPhoto: (kind: IdDocumentKind, file: File) => {
+      const form = new FormData();
+      form.set("kind", kind);
+      form.set("file", file, file.name);
+      return call<{ id: string }>("/api/identity/documents", { method: "POST", body: form });
+    },
+    submitLicense: (details: LicenseDetails, documents: Record<IdDocumentKind, string>) =>
+      call<{ me: Me }>("/api/identity/submit", { method: "POST", body: { ...details, documents } }).then((r) => r.me),
+    hostLicense: (userId: string, action: "approve" | "reject", body: Partial<LicenseDetails> & { licenseLast4?: string; reason?: string }) =>
+      call<{ dashboard: HostDashboard }>(`/api/host/licenses/${enc(userId)}/${action}`, { method: "POST", body }).then((r) => r.dashboard),
     startIdentity: (returnPath: string) =>
       call<{ url: string } | { done: true }>("/api/identity/start", { method: "POST", body: { returnPath } }),
     createBooking: (slug: string, input: CreateBookingRequest) =>

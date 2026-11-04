@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Me, PaymentMethod } from "../../shared/types.ts";
+import type { IdCheckMode, Me, PaymentMethod } from "../../shared/types.ts";
 import { accountApi, type AccountApi } from "./api.ts";
 import { useSession } from "./session.tsx";
 
 type MeState =
   | { status: "idle" } // signed out, or sign-in unavailable
   | { status: "loading" }
-  | { status: "ready"; me: Me; paymentMethods: PaymentMethod[] }
+  | { status: "ready"; me: Me; paymentMethods: PaymentMethod[]; idCheck: IdCheckMode }
   | { status: "error"; error: Error };
 
 type Account = {
@@ -14,6 +14,8 @@ type Account = {
   state: MeState;
   /** Re-reads the profile. `quiet` keeps the current data on screen while it loads. */
   refresh(opts?: { quiet?: boolean }): Promise<Me | null>;
+  /** Swap in a profile the server just returned, without another round trip. */
+  setMe(me: Me): void;
 };
 
 const AccountContext = createContext<Account | null>(null);
@@ -35,7 +37,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (!opts.quiet) setState({ status: "loading" });
       try {
         const r = await api.me({ sync: opts.sync });
-        setState({ status: "ready", me: r.me, paymentMethods: r.paymentMethods });
+        setState({ status: "ready", me: r.me, paymentMethods: r.paymentMethods, idCheck: r.idCheck });
         return r.me;
       } catch (error) {
         if (!opts.quiet) setState({ status: "error", error: error as Error });
@@ -50,6 +52,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     else setState({ status: "idle" });
   }, [session.status, load]);
 
-  const value = useMemo<Account>(() => ({ api, state, refresh: (opts) => load({ quiet: opts?.quiet }) }), [api, state, load]);
+  const setMe = useCallback((me: Me) => setState((s) => (s.status === "ready" ? { ...s, me } : s)), []);
+  const value = useMemo<Account>(
+    () => ({ api, state, refresh: (opts) => load({ quiet: opts?.quiet }), setMe }),
+    [api, state, load, setMe],
+  );
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
 }

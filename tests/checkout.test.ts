@@ -79,12 +79,25 @@ const store: ProofStore = {
   },
 };
 
+const idBlobs = new Map<string, { data: ArrayBuffer; contentType: string }>();
+const idStore: ProofStore = {
+  async put(key, data, contentType) {
+    idBlobs.set(key, { data, contentType });
+  },
+  async get(key) {
+    return idBlobs.get(key) ?? null;
+  },
+};
+
 let clock = new Date("2026-11-03T15:00:00Z"); // Tue Nov 3, 10:00 AM in Atlanta
+let idCheck: "manual" | "stripe" = "stripe";
 const services = (): Services => ({
   db,
   auth,
   identity,
   proofs: store,
+  idDocuments: idStore,
+  idCheck,
   payments: { cashtag: "$traffic36test", chimePhone: "470-555-0100" },
   hostEmails: [HOST_EMAIL],
   now: () => clock,
@@ -163,12 +176,18 @@ const hostAction = (code: string, action: string, body: unknown = {}, as = "host
   call<{ dashboard: HostDashboard }>(api.hostActionHandler, { method: "POST", path: `/api/host/bookings/${code}/${action}`, as, body, params: { code, action } });
 
 beforeEach(async () => {
-  for (const table of ["audit_log", "outbox", "payments", "payment_proofs", "extensions", "bookings", "blocks", "users"]) {
+  for (const table of ["audit_log", "outbox", "payments", "payment_proofs", "identity_documents", "identity_submissions", "extensions", "bookings", "blocks"]) {
+    await db.query(`DELETE FROM ${table}`);
+  }
+  await db.query(`UPDATE users SET identity_reviewed_by = NULL`);
+  for (const table of ["users"]) {
     await db.query(`DELETE FROM ${table}`);
   }
   profiles.clear();
   outcomes.clear();
   blobs.clear();
+  idBlobs.clear();
+  idCheck = "stripe";
   created.length = 0;
   clock = new Date("2026-11-03T15:00:00Z");
   await signUp("host", "Xavier Smith", HOST_EMAIL);
@@ -481,6 +500,135 @@ describe("host review", () => {
       [code],
     );
     expect(rows[0]).toEqual({ status: "closed", refunded_cents: 3000, deposit_deduction_cents: 2000 });
+  });
+});
+
+describe("license reviewed by the host", () => {
+  const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70]);
+  const details = { legalName: "Jordan A Ellis", dob: "2004-05-01", licenseState: "ga", licenseExpiresOn: "2030-01-31" };
+
+  async function uploadDoc(as: string, kind: string, bytes: Uint8Array = JPEG) {
+    const form = new FormData();
+    form.set("kind", kind);
+    form.set("file", new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }), `${kind}.jpg`);
+    return call<{ id: string }>(api.idDocumentUploadHandler, { method: "POST", path: "/api/identity/documents", as, form });
+  }
+
+  async function sendLicense(as: string, extra: Record<string, unknown> = {}) {
+    const documents: Record<string, string> = {};
+    for (const kind of ["license_front", "license_back", "selfie"]) documents[kind] = (await uploadDoc(as, kind)).body.id;
+    return call<{ me: Me }>(api.licenseSubmitHandler, { method: "POST", path: "/api/identity/submit", as, body: { ...details, documents, ...extra } });
+  }
+
+  const license = (userId: string, action: string, body: unknown) =>
+    call<{ dashboard: HostDashboard }>(api.hostLicenseHandler, { method: "POST", path: `/api/host/licenses/${userId}/${action}`, as: "host", body, params: { userId, action } });
+
+  beforeEach(async () => {
+    idCheck = "manual";
+    await signUp("jordan", "Jordan Ellis", "jordan@example.com");
+  });
+
+  test("the app says which kind of check is running, and Stripe's route is closed", async () => {
+    expect((await me("jordan")).body).toMatchObject({ idCheck: "manual" });
+    const res = await call(api.identityStartHandler, { method: "POST", path: "/api/identity/start", as: "jordan", body: {} });
+    expect(res.status).toBe(409);
+  });
+
+  test("photos must be real images of a known kind", async () => {
+    expect((await uploadDoc("jordan", "passport")).body.field).toBe("kind");
+    expect((await uploadDoc("jordan", "selfie", new TextEncoder().encode("not an image"))).body.field).toBe("selfie");
+    expect((await uploadDoc("jordan", "selfie")).status).toBe(201);
+  });
+
+  test("all three photos and valid details are required", async () => {
+    const front = (await uploadDoc("jordan", "license_front")).body.id;
+    const missing = await call(api.licenseSubmitHandler, {
+      method: "POST", path: "/api/identity/submit", as: "jordan", body: { ...details, documents: { license_front: front } },
+    });
+    expect(missing.body.field).toBe("license_back");
+    expect((await sendLicense("jordan", { dob: "2008-01-01" })).body.error).toBe("Renters must be 21 or older.");
+    expect((await sendLicense("jordan", { licenseExpiresOn: "2026-10-01" })).body.field).toBe("licenseExpiresOn");
+    expect((await sendLicense("jordan", { licenseState: "ZZ" })).body.field).toBe("licenseState");
+  });
+
+  test("someone else's photos can't be used", async () => {
+    await signUp("sam", "Sam Lee", "sam@example.com");
+    const theirs = (await uploadDoc("sam", "selfie")).body.id;
+    const documents = {
+      license_front: (await uploadDoc("jordan", "license_front")).body.id,
+      license_back: (await uploadDoc("jordan", "license_back")).body.id,
+      selfie: theirs,
+    };
+    const res = await call(api.licenseSubmitHandler, { method: "POST", path: "/api/identity/submit", as: "jordan", body: { ...details, documents } });
+    expect(res.body.field).toBe("selfie");
+  });
+
+  test("a sent license is in review, and the renter can hold dates and pay while it waits", async () => {
+    const res = await sendLicense("jordan");
+    expect(res.status).toBe(201);
+    expect(res.body.me.identity).toMatchObject({ status: "in_review", method: "manual", name: "Jordan A Ellis", licenseState: "GA" });
+    expect((await createBooking("jordan", GLC)).body.error).toBe("Drivers for this car must be 25 or older on the pickup date.");
+    const { body } = await createBooking("jordan", ELANTRA);
+    expect((await upload("jordan", body.code)).status).toBe(201);
+    const { rows } = await db.query<{ template: string }>(`SELECT template FROM outbox ORDER BY created_at`);
+    expect(rows.map((r) => r.template)).toEqual(["host_license_review", "host_payment_review"]);
+  });
+
+  test("the host sees the photos and details; nobody else can open the photos", async () => {
+    await sendLicense("jordan");
+    const { body } = await dashboard();
+    const review = body.dashboard.licenses[0]!;
+    expect(review).toMatchObject({ legalName: "Jordan A Ellis", dob: "2004-05-01", age: 22, licenseState: "GA", previousRejections: 0 });
+    expect(review.documents.map((d) => d.kind)).toEqual(["license_front", "license_back", "selfie"]);
+    const id = review.documents[0]!.url.split("/").pop()!;
+    const open = (as: string) => call(api.idDocumentImageHandler, { path: review.documents[0]!.url, as, params: { id } });
+    expect((await open("host")).body).toEqual({ bytes: JPEG.byteLength, type: "image/jpeg" });
+    expect((await open("jordan")).status).toBe(404);
+  });
+
+  test("a booking can't be confirmed until the license is approved", async () => {
+    await sendLicense("jordan");
+    const { body } = await createBooking("jordan", ELANTRA);
+    await upload("jordan", body.code, { sender: "Jordan Ellis" });
+    const card = (await dashboard()).body.dashboard.review[0]!;
+    expect(card.renter.licenseApproved).toBe(false);
+    expect(card.warnings[0]).toMatch(/license isn't approved yet/);
+    expect((await hostAction(body.code, "confirm")).status).toBe(409);
+    const userId = (await dashboard()).body.dashboard.licenses[0]!.userId;
+    expect((await license(userId, "approve", { ...details, licenseLast4: "4821" })).status).toBe(200);
+    expect((await me("jordan")).body.me.identity).toMatchObject({ status: "verified", licenseLast4: "4821" });
+    expect((await hostAction(body.code, "confirm")).status).toBe(200);
+  });
+
+  test("the host's corrections count: a corrected birth date can block a confirmation", async () => {
+    await sendLicense("jordan", { dob: "1999-05-01" }); // typed as 27
+    const { body } = await createBooking("jordan", GLC);
+    await upload("jordan", body.code);
+    const userId = (await dashboard()).body.dashboard.licenses[0]!.userId;
+    await license(userId, "approve", { ...details, dob: "2003-05-01" }); // the photo says 23
+    const res = await hostAction(body.code, "confirm");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/under 25/);
+  });
+
+  test("a rejected license shows the reason, and the renter can send new photos", async () => {
+    await sendLicense("jordan");
+    const userId = (await dashboard()).body.dashboard.licenses[0]!.userId;
+    expect((await license(userId, "reject", {})).body.field).toBe("reason");
+    await license(userId, "reject", { reason: "The back photo is blurry. Retake it in better light." });
+    expect((await me("jordan")).body.me.identity).toMatchObject({ status: "failed", failureReason: "The back photo is blurry. Retake it in better light." });
+    expect((await createBooking("jordan", ELANTRA)).status).toBe(403);
+    expect((await sendLicense("jordan")).status).toBe(201);
+    const again = (await dashboard()).body.dashboard.licenses;
+    expect(again).toHaveLength(1);
+    expect(again[0]!.previousRejections).toBe(1);
+  });
+
+  test("resending while in review replaces the earlier submission", async () => {
+    await sendLicense("jordan", { legalName: "Jordn Ellis" });
+    await sendLicense("jordan");
+    const reviews = (await dashboard()).body.dashboard.licenses;
+    expect(reviews.map((r) => r.legalName)).toEqual(["Jordan A Ellis"]);
   });
 });
 
