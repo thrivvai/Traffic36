@@ -6,6 +6,8 @@ export class HttpError extends Error {
     readonly status: number,
     message: string,
     readonly field?: string,
+    /** A short machine-readable cause, safe to show, for problems the user can't fix themselves. */
+    readonly reason?: string,
   ) {
     super(message);
   }
@@ -50,7 +52,7 @@ export function route(methods: string[], handler: Handler) {
       return await handler(req, context.params ?? {}, { ip: context.ip ?? null });
     } catch (err) {
       if (err instanceof HttpError) {
-        return json({ error: err.message, field: err.field } satisfies ApiError, { status: err.status });
+        return json({ error: err.message, field: err.field, reason: err.reason } satisfies ApiError, { status: err.status });
       }
       console.error(`[${context.requestId ?? "local"}]`, err);
       return json({ error: "Something went wrong on our side. Try again in a moment." } satisfies ApiError, { status: 500 });

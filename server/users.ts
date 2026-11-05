@@ -79,10 +79,13 @@ export type AuthDeps = { db: Db; auth: AuthProvider; hostEmails: string[] };
 
 /** The signed-in user, creating their row on first contact. Throws 401 when signed out. */
 export async function requireUser(req: Request, deps: AuthDeps, opts: { refresh?: boolean } = {}): Promise<UserRecord> {
-  const clerkUserId = await deps.auth.userIdFrom(req);
-  if (!clerkUserId) throw new HttpError(401, "Sign in to continue.");
-  const existing = opts.refresh ? null : await findUserByClerkId(deps.db, clerkUserId);
-  return existing ?? syncUser(deps.db, clerkUserId, await deps.auth.profile(clerkUserId), deps.hostEmails);
+  const session = await deps.auth.verify(req);
+  if (!session.ok) throw new HttpError(401, "Sign in to continue.", undefined, session.reason);
+  const existing = opts.refresh ? null : await findUserByClerkId(deps.db, session.userId);
+  if (existing) return existing;
+  // Contact details usually ride in the session token; Clerk's API is the fallback.
+  const profile = session.profile ?? (await deps.auth.profile(session.userId));
+  return syncUser(deps.db, session.userId, profile, deps.hostEmails);
 }
 
 export async function requireHost(req: Request, deps: AuthDeps): Promise<UserRecord> {

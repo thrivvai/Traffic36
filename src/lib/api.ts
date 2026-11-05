@@ -22,6 +22,7 @@ export class RequestError extends Error {
     readonly status: number,
     message: string,
     readonly field?: string,
+    readonly reason?: string,
   ) {
     super(message);
   }
@@ -49,7 +50,9 @@ async function send(path: string, init: Init = {}): Promise<Response> {
 async function request<T>(path: string, init: Init = {}): Promise<T> {
   const res = await send(path, init);
   const body = (await res.json().catch(() => null)) as (T & Partial<ApiError>) | null;
-  if (!res.ok || !body) throw new RequestError(res.status, body?.error ?? "Something went wrong. Try again in a moment.", body?.field);
+  if (!res.ok || !body) {
+    throw new RequestError(res.status, body?.error ?? "Something went wrong. Try again in a moment.", body?.field, body?.reason);
+  }
   return body;
 }
 

@@ -152,6 +152,9 @@ function AccountStep({ me }: { me: Me | null }) {
           {rejected
             ? "We couldn't confirm your sign-in. Sign out, sign back in, and try again. If it keeps happening, message us at admin@traffic36.com."
             : account.state.error.message}{" "}
+          {rejected && (account.state.error as RequestError).reason && (
+            <span className="mono reason">Code: {(account.state.error as RequestError).reason}. </span>
+          )}
           {rejected ? (
             <button className="link" onClick={() => void session.signOut()}>Sign out</button>
           ) : (
