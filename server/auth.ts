@@ -56,7 +56,7 @@ export function clerkAuth(): AuthProvider {
     async userIdFrom(req) {
       const token = bearer(req);
       if (!token) {
-        console.warn("Signed-in call arrived without a session token.");
+        console.error("Signed-in call arrived without a session token.");
         return null;
       }
       const { data, errors } = await verifyToken(token, {
@@ -70,7 +70,7 @@ export function clerkAuth(): AuthProvider {
       if (errors) {
         // Never log the token itself. The reason says which setting to fix.
         const [e] = errors as [{ reason?: string; message?: string }];
-        console.warn(`Clerk rejected a session token: ${e.reason ?? "unknown"}. ${e.message ?? ""}`);
+        console.error(`Clerk rejected a session token: ${e.reason ?? "unknown"}. ${e.message ?? ""}`);
         return null;
       }
       const sub = (data as { sub?: unknown } | undefined)?.sub;
