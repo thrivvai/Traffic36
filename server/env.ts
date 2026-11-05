@@ -16,7 +16,7 @@ export function requireEnv(name: string): string {
   const value = env(name);
   if (!value) {
     console.error(`Missing environment variable ${name}. Add it in Netlify: Project configuration > Environment variables.`);
-    throw new HttpError(503, "Booking is temporarily unavailable. Try again later or message us at admin@traffic36.com.");
+    throw new HttpError(503, "Booking is temporarily unavailable. Try again later or call or text us at (646) 397-3139.");
   }
   return value;
 }

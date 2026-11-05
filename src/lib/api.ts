@@ -2,6 +2,7 @@ import type {
   ApiError,
   Booking,
   CreateBookingRequest,
+  HostBookingDetail,
   HostDashboard,
   IdCheckMode,
   IdDocumentKind,
@@ -12,6 +13,8 @@ import type {
   Quote,
   QuoteRequest,
   RejectReason,
+  RenterProfile,
+  RenterSummary,
   VehicleDetail,
   VehicleSummary,
 } from "../../shared/types.ts";
@@ -95,7 +98,7 @@ export function accountApi(getToken: TokenSource) {
     cancelBooking: (code: string) => call<{ ok: true }>(`/api/bookings/${enc(code)}/cancel`, { method: "POST" }),
     uploadProof: (code: string, form: FormData) =>
       call<{ booking: Booking }>(`/api/bookings/${enc(code)}/proofs`, { method: "POST", body: form }).then((r) => r.booking),
-    /** A screenshot as an object URL. The caller revokes it. */
+    /** A private image (payment screenshot or license photo) as an object URL. The caller revokes it. */
     proofImage: async (url: string, signal?: AbortSignal) => {
       const res = await send(url, { signal, token: await getToken() });
       if (!res.ok) throw new RequestError(res.status, "We couldn't load that screenshot.");
@@ -104,8 +107,20 @@ export function accountApi(getToken: TokenSource) {
     hostDashboard: (signal?: AbortSignal) => call<{ dashboard: HostDashboard }>("/api/host", { signal }).then((r) => r.dashboard),
     hostAction: (code: string, action: "confirm" | "reject" | "cancel" | "deposit", body: HostActionBody = {}) =>
       call<{ dashboard: HostDashboard }>(`/api/host/bookings/${enc(code)}/${action}`, { method: "POST", body }).then((r) => r.dashboard),
+    hostBooking: (code: string, signal?: AbortSignal) =>
+      call<{ booking: HostBookingDetail }>(`/api/host/bookings/${enc(code)}`, { signal }).then((r) => r.booking),
+    setHandoff: (code: string, body: HandoffBody) =>
+      call<{ booking: HostBookingDetail }>(`/api/host/bookings/${enc(code)}/handoff`, { method: "POST", body }).then((r) => r.booking),
+    hostRenters: (q: string, signal?: AbortSignal) =>
+      call<{ renters: RenterSummary[] }>(`/api/host/renters${q ? `?${new URLSearchParams({ q })}` : ""}`, { signal }).then((r) => r.renters),
+    hostRenter: (id: string, signal?: AbortSignal) =>
+      call<{ renter: RenterProfile }>(`/api/host/renters/${enc(id)}`, { signal }).then((r) => r.renter),
+    blockRenter: (id: string, body: { value: boolean; note?: string }) =>
+      call<{ renter: RenterProfile }>(`/api/host/renters/${enc(id)}/block`, { method: "POST", body }).then((r) => r.renter),
   };
 }
+
+export type HandoffBody = { method: "lockbox" | "in_person"; lockboxCode?: string; note?: string };
 
 export type HostActionBody = { approveDelivery?: boolean; reason?: RejectReason; note?: string; refundCents?: number };
 

@@ -14,7 +14,7 @@ import type { IdentityProvider, IdentityResult } from "../server/identity.ts";
 import { sniffImage, type ProofStore } from "../server/proofs.ts";
 import type { Services } from "../server/services.ts";
 import { MINUTE, POLICY } from "../shared/policy.ts";
-import type { Booking, HostDashboard, Me } from "../shared/types.ts";
+import type { Booking, HostBookingDetail, HostDashboard, Me, RenterProfile, RenterSummary } from "../shared/types.ts";
 
 const GLC = "mercedes-glc-300-coupe-2021"; // drivers 25+
 const ELANTRA = "hyundai-elantra-sel-sport-2026"; // drivers 21+
@@ -89,6 +89,8 @@ const idStore: ProofStore = {
   },
 };
 
+const CODE_KEY = Buffer.alloc(32, 7);
+
 let clock = new Date("2026-11-03T15:00:00Z"); // Tue Nov 3, 10:00 AM in Atlanta
 let idCheck: "manual" | "stripe" = "stripe";
 const services = (): Services => ({
@@ -99,6 +101,7 @@ const services = (): Services => ({
   idDocuments: idStore,
   idCheck,
   payments: { cashtag: "$traffic36test", chimePhone: "470-555-0100" },
+  codeKey: CODE_KEY,
   hostEmails: [HOST_EMAIL],
   now: () => clock,
 });
@@ -629,6 +632,120 @@ describe("license reviewed by the host", () => {
     await sendLicense("jordan");
     const reviews = (await dashboard()).body.dashboard.licenses;
     expect(reviews.map((r) => r.legalName)).toEqual(["Jordan A Ellis"]);
+  });
+});
+
+describe("pickup pass and renter records", () => {
+  let code: string;
+  const handoff = (body: unknown, as = "host") => hostAction(code, "handoff", body, as);
+  const detail = () =>
+    call<{ booking: HostBookingDetail }>(api.hostBookingHandler, { path: `/api/host/bookings/${code}`, as: "host", params: { code } });
+  const pass = async () => (await getBooking("jordan", code)).body.booking.pass;
+
+  beforeEach(async () => {
+    await signUp("jordan", "Jordan Ellis", "jordan@example.com");
+    await verify("jordan", "1996-05-01");
+    code = (await createBooking("jordan", ELANTRA)).body.code; // Fri Nov 6 10:00 to Mon Nov 9 10:00, Atlanta time
+    await upload("jordan", code);
+    await hostAction(code, "confirm");
+  });
+
+  test("the host is warned the day before when there's no pickup plan", async () => {
+    clock = new Date("2026-11-05T16:00:00Z");
+    const [trip] = (await dashboard()).body.dashboard.upcoming;
+    expect(trip?.warnings).toContain("No pickup plan yet. Add the lockbox code, or choose to meet the renter in person.");
+  });
+
+  test("codes are checked, never stored or logged in plain text, and only the host can set them", async () => {
+    expect((await handoff({ method: "teleport" })).body.field).toBe("method");
+    expect((await handoff({ method: "lockbox", lockboxCode: "12" })).body.field).toBe("lockboxCode");
+    expect((await handoff({ method: "lockbox", lockboxCode: "4821" }, "jordan")).status).toBe(403);
+    expect((await handoff({ method: "lockbox", lockboxCode: "4821" })).status).toBe(200);
+    const { rows } = await db.query<{ code_ciphertext: string }>(`SELECT code_ciphertext FROM access_codes`);
+    expect(rows[0]?.code_ciphertext).not.toContain("4821");
+    const audit = await db.query<{ details: unknown }>(`SELECT details FROM audit_log WHERE action = 'handoff_set'`);
+    expect(JSON.stringify(audit.rows)).not.toContain("4821");
+    expect((await detail()).body.booking.handoff).toMatchObject({ method: "lockbox", code: "4821", revealedAt: null });
+  });
+
+  test("the renter sees the code from an hour before pickup until two hours after the return", async () => {
+    await handoff({ method: "lockbox", lockboxCode: "4821" });
+    clock = new Date("2026-11-06T13:59:00Z"); // 8:59 AM, one minute before the pass opens
+    expect(await pass()).toMatchObject({ handoff: "lockbox", open: false, code: null, opensAt: "2026-11-06T14:00:00.000Z" });
+    expect((await detail()).body.booking.handoff.revealedAt).toBeNull();
+
+    clock = new Date("2026-11-06T14:30:00Z");
+    expect(await pass()).toMatchObject({ open: true, code: "4821", closesAt: "2026-11-09T17:00:00.000Z" });
+    expect((await detail()).body.booking.handoff.revealedAt).toBe("2026-11-06T14:30:00.000Z");
+
+    clock = new Date("2026-11-09T17:01:00Z");
+    expect(await pass()).toMatchObject({ open: false, code: null });
+  });
+
+  test("dashes and spaces in a code are ignored, and the trip note shows with the code", async () => {
+    await handoff({ method: "lockbox", lockboxCode: "4-8 2-1", note: "Space 14, lockbox on the driver's window" });
+    expect((await detail()).body.booking.handoff).toMatchObject({ code: "4821", note: "Space 14, lockbox on the driver's window" });
+    expect(await pass()).toMatchObject({ open: false, note: null });
+    clock = new Date("2026-11-06T14:30:00Z");
+    expect(await pass()).toMatchObject({ code: "4821", note: "Space 14, lockbox on the driver's window" });
+    expect((await handoff({ method: "lockbox", lockboxCode: "4821", note: "x".repeat(301) })).body.field).toBe("note");
+  });
+
+  test("a new code resets 'opened', and switching to in person removes the code", async () => {
+    await handoff({ method: "lockbox", lockboxCode: "4821" });
+    clock = new Date("2026-11-06T14:30:00Z");
+    await pass();
+    await handoff({ method: "lockbox", lockboxCode: "7734" });
+    expect((await detail()).body.booking.handoff).toMatchObject({ code: "7734", revealedAt: null });
+    await handoff({ method: "in_person" });
+    expect(await pass()).toMatchObject({ handoff: "in_person", open: true, code: null });
+    const { rows } = await db.query(`SELECT 1 FROM access_codes`);
+    expect(rows).toHaveLength(0);
+  });
+
+  test("a delivery is handed over at the address, so there's no code to set", async () => {
+    const delivery = (await createBooking("jordan", GLC, { pickup: "delivery", deliveryAddress: "500 Main St, Atlanta, GA" })).body.code;
+    await upload("jordan", delivery);
+    await hostAction(delivery, "confirm", { approveDelivery: true });
+    expect((await getBooking("jordan", delivery)).body.booking.pass?.handoff).toBe("delivery");
+    expect((await hostAction(delivery, "handoff", { method: "lockbox", lockboxCode: "4821" })).status).toBe(409);
+  });
+
+  test("the host can find a renter and open their full record", async () => {
+    const list = await call<{ renters: RenterSummary[] }>(api.hostRentersHandler, { path: "/api/host/renters?q=jordan@", as: "host" });
+    expect(list.body.renters).toHaveLength(1);
+    const renter = list.body.renters[0]!;
+    expect(renter).toMatchObject({ name: "Jordan Ellis", trips: 1, licenseStatus: "verified", doNotRent: false });
+    const byPhone = await call<{ renters: RenterSummary[] }>(api.hostRentersHandler, { path: "/api/host/renters?q=555-0123", as: "host" });
+    expect(byPhone.body.renters.map((r) => r.id)).toEqual([renter.id]);
+
+    const profile = await call<{ renter: RenterProfile }>(api.hostRentersHandler, {
+      path: `/api/host/renters/${renter.id}`, as: "host", params: { id: renter.id },
+    });
+    expect(profile.body.renter).toMatchObject({ dob: "1996-05-01", age: 30, licenseState: "GA", licenseLast4: "4821" });
+    expect(profile.body.renter.bookings.map((b) => b.code)).toEqual([code]);
+    expect(profile.body.renter.payments).toEqual([expect.objectContaining({ bookingCode: code, kind: "booking_charge", amountCents: 27500 })]);
+    const renterView = await call(api.hostRentersHandler, { path: "/api/host/renters", as: "jordan" });
+    expect(renterView.status).toBe(403);
+  });
+
+  test("the booking record shows the money and every host action", async () => {
+    await handoff({ method: "lockbox", lockboxCode: "4821" });
+    const { booking } = (await detail()).body;
+    expect(booking.payments.map((p) => p.kind)).toEqual(["booking_charge"]);
+    expect(booking.activity.map((a) => a.action)).toEqual(["handoff_set", "payment_confirmed"]);
+    expect(booking.renter.id).toBeTruthy();
+  });
+
+  test("the host can stop a renter from booking, with a reason", async () => {
+    const id = (await call<{ renters: RenterSummary[] }>(api.hostRentersHandler, { path: "/api/host/renters", as: "host" })).body.renters[0]!.id;
+    const block = (body: unknown) =>
+      call<{ renter: RenterProfile }>(api.hostRenterBlockHandler, { method: "POST", path: `/api/host/renters/${id}/block`, as: "host", body, params: { id } });
+    expect((await block({ value: true })).body.field).toBe("note");
+    expect((await block({ value: true, note: "Returned the car late twice" })).body.renter).toMatchObject({ doNotRent: true, doNotRentNote: "Returned the car late twice" });
+    expect((await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).status).toBe(403);
+    await block({ value: false });
+    expect((await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).status).toBe(201);
   });
 });
 

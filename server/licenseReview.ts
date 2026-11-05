@@ -43,7 +43,7 @@ export async function uploadIdDocument(
     [user.id, new Date(now.getTime() - 24 * 60 * 60_000)],
   );
   if ((rows[0]?.n ?? 0) >= POLICY.maxIdUploadsPerDay) {
-    throw new HttpError(429, "That's a lot of uploads for one day. Try again tomorrow or message us at admin@traffic36.com.");
+    throw new HttpError(429, "That's a lot of uploads for one day. Try again tomorrow or call or text us at (646) 397-3139.");
   }
 
   const id = randomUUID();
@@ -92,7 +92,7 @@ export async function submitLicense(
   hostEmails: string[],
   now: Date,
 ): Promise<void> {
-  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Message us at admin@traffic36.com.");
+  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Call or text us at (646) 397-3139.");
   if (licenseValid(user, now)) throw new HttpError(409, "Your license is already approved.");
   const details = readDetails(input, now);
   const docs = (input.documents ?? {}) as Partial<Record<IdDocumentKind, unknown>>;

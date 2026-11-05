@@ -146,7 +146,7 @@ export async function startIdentity(
   now: Date,
 ): Promise<{ url: string } | { done: true }> {
   if (licenseValid(user, now)) return { done: true };
-  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Message us at admin@traffic36.com.");
+  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Call or text us at (646) 397-3139.");
 
   if (user.identitySessionId && user.identityStatus !== "verified") {
     const result = await provider.retrieve(user.identitySessionId);
@@ -160,7 +160,7 @@ export async function startIdentity(
   }
 
   if (user.identityAttempts >= POLICY.maxIdentityAttempts) {
-    throw new HttpError(429, "You've reached the limit for license checks. Message us at admin@traffic36.com and we'll help.");
+    throw new HttpError(429, "You've reached the limit for license checks. Call or text us at (646) 397-3139 and we'll help.");
   }
   const session = await provider.create({
     userId: user.id,

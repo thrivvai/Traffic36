@@ -20,12 +20,17 @@ import {
 import { HttpError, badRequest, json, readJson, route } from "./http.ts";
 import { identityWebhook, refreshIdentity, startIdentity } from "./identity.ts";
 import { approveLicense, readIdDocument, rejectLicense, submitLicense, uploadIdDocument } from "./licenseReview.ts";
+import { setHandoff } from "./handoff.ts";
+import { hostBookingDetail, listRenters, renterProfile, setDoNotRent } from "./hostRenters.ts";
 import type { Services } from "./services.ts";
 import { publicMe, requireHost, requireUser } from "./users.ts";
 
 type Get = () => Services;
 
 const deps = (s: Services) => ({ db: s.db, auth: s.auth, hostEmails: s.hostEmails });
+
+/** Payment settings plus the lockbox key, for views that may show a pickup code. */
+const view = (s: Services) => ({ ...s.payments, codeKey: s.codeKey });
 
 /** GET /api/me. `?sync=1` refreshes name, email, phone and role from Clerk (the app does this once per visit). */
 export const meHandler = (get: Get) =>
@@ -87,7 +92,7 @@ export const hostLicenseHandler = (get: Get) =>
     if (params.action === "approve") await approveLicense(s.db, host, params.userId ?? "", body, s.now());
     else if (params.action === "reject") await rejectLicense(s.db, host, params.userId ?? "", body, s.now());
     else throw new HttpError(404, "Unknown action.");
-    return json({ dashboard: await hostDashboard(s.db, s.payments, s.now()) });
+    return json({ dashboard: await hostDashboard(s.db, view(s), s.now()) });
   });
 
 /** POST /api/identity/start { returnPath } -> { url } to send the renter to Stripe, or { done: true }. */
@@ -138,7 +143,7 @@ export const bookingHandler = (get: Get) =>
   route(["GET"], async (req, params) => {
     const s = get();
     const user = await requireUser(req, deps(s));
-    return json({ booking: await getBooking(s.db, s.payments, user, params.code ?? "", s.now()) });
+    return json({ booking: await getBooking(s.db, view(s), user, params.code ?? "", s.now()) });
   });
 
 /** POST /api/bookings/:code/cancel, for unpaid bookings. */
@@ -195,7 +200,33 @@ export const hostDashboardHandler = (get: Get) =>
   route(["GET"], async (req) => {
     const s = get();
     await requireHost(req, deps(s));
-    return json({ dashboard: await hostDashboard(s.db, s.payments, s.now()) });
+    return json({ dashboard: await hostDashboard(s.db, view(s), s.now()) });
+  });
+
+/** GET /api/host/renters?q= lists renters; GET /api/host/renters/:id opens one. */
+export const hostRentersHandler = (get: Get) =>
+  route(["GET"], async (req, params) => {
+    const s = get();
+    await requireHost(req, deps(s));
+    if (params.id) return json({ renter: await renterProfile(s.db, view(s), params.id, s.now()) });
+    return json({ renters: await listRenters(s.db, new URL(req.url).searchParams.get("q") ?? "", s.now()) });
+  });
+
+/** POST /api/host/renters/:id/block { value, note } */
+export const hostRenterBlockHandler = (get: Get) =>
+  route(["POST"], async (req, params) => {
+    const s = get();
+    const host = await requireHost(req, deps(s));
+    await setDoNotRent(s.db, host, params.id ?? "", await readJson(req));
+    return json({ renter: await renterProfile(s.db, view(s), params.id ?? "", s.now()) });
+  });
+
+/** GET /api/host/bookings/:code, the full record of one booking. */
+export const hostBookingHandler = (get: Get) =>
+  route(["GET"], async (req, params) => {
+    const s = get();
+    await requireHost(req, deps(s));
+    return json({ booking: await hostBookingDetail(s.db, view(s), params.code ?? "", s.now()) });
   });
 
 /** POST /api/host/bookings/:code/:action where action is confirm, reject, cancel or deposit. */
@@ -219,8 +250,11 @@ export const hostActionHandler = (get: Get) =>
       case "deposit":
         await returnDeposit(s.db, host, code, body, now);
         break;
+      case "handoff":
+        await setHandoff(s.db, s.codeKey, host, code, body, now);
+        return json({ booking: await hostBookingDetail(s.db, view(s), code, now) });
       default:
         throw new HttpError(404, "Unknown action.");
     }
-    return json({ dashboard: await hostDashboard(s.db, s.payments, now) });
+    return json({ dashboard: await hostDashboard(s.db, view(s), now) });
   });

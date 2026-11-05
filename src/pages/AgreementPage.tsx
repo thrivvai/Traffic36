@@ -65,11 +65,12 @@ export function AgreementPage() {
 
       <h2>Your information</h2>
       <p>
-        Stripe checks your driver's license for us. We keep your name, your license's expiry date, its issuing state and its last four digits,
-        your date of birth to check age rules, and your payment screenshots. Stripe keeps the license photos and your selfie.
+        We check your driver's license from the photos you send. We keep your name, date of birth, license state and expiry date, the
+        photos of your license and your selfie, and your payment screenshots. Only Traffic36 can see them, and we use them only to
+        check who's driving and to settle your trip.
       </p>
 
-      <p className="fine left">Questions about this agreement: admin@traffic36.com</p>
+      <p className="fine left">Questions about this agreement: call or text (646) 397-3139</p>
     </div>
   );
 }

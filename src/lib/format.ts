@@ -24,6 +24,26 @@ export function formatWhen(iso: string): string {
   });
 }
 
+/** "Nov 4, 2026" for an instant, in the lot's time zone. */
+export function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { timeZone: POLICY.timeZone, month: "short", day: "numeric", year: "numeric" });
+}
+
+/** "May 1, 1996" for a calendar date like a birthday, with no time zone shift. */
+export function formatDay(date: string): string {
+  return new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+}
+
+/** "in 3 h 12 min", "in 2 days", for a moment ahead. */
+export function untilText(ms: number): string {
+  const mins = Math.max(1, Math.ceil(ms / 60_000));
+  if (mins < 60) return `in ${mins} min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `in ${hours} h${mins % 60 ? ` ${mins % 60} min` : ""}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} ${days === 1 ? "day" : "days"}`;
+}
+
 /** Half-hour slots inside the standard hours, narrowed to a location's own hours when it has them. */
 export function timeSlots(hours?: { opensAt: string | null; closesAt: string | null }): { value: string; label: string }[] {
   const from = hours?.opensAt && hours.opensAt > POLICY.firstSlot ? hours.opensAt : POLICY.firstSlot;

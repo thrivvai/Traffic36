@@ -132,7 +132,7 @@ function AccountStep({ me }: { me: Me | null }) {
     return <div className="skeleton" style={{ height: 44 }} />;
   }
   if (session.status === "unavailable") {
-    return <div className="note bad"><Icon name="alert" size={16} /><span>Online booking isn't open yet. Message us at admin@traffic36.com to book.</span></div>;
+    return <div className="note bad"><Icon name="alert" size={16} /><span>Online booking isn't open yet. Call or text us at (646) 397-3139 to book.</span></div>;
   }
   if (session.status === "signed-out") {
     return (
@@ -150,7 +150,7 @@ function AccountStep({ me }: { me: Me | null }) {
         <Icon name="alert" size={16} />
         <span>
           {rejected
-            ? "We couldn't confirm your sign-in. Sign out, sign back in, and try again. If it keeps happening, message us at admin@traffic36.com."
+            ? "We couldn't confirm your sign-in. Sign out, sign back in, and try again. If it keeps happening, call or text us at (646) 397-3139."
             : account.state.error.message}{" "}
           {rejected && (account.state.error as RequestError).reason && (
             <span className="mono reason">Code: {(account.state.error as RequestError).reason}. </span>
@@ -300,7 +300,7 @@ function StripeLicenseStep({ me, minAge }: { me: Me; minAge: number }) {
               {busy ? "Opening Stripe…" : id.status === "pending" ? "Continue license check" : id.status === "failed" ? "Try again" : "Verify my license"}
             </button>
           ) : (
-            <p className="flow-text">You've used all your license checks. Message us at admin@traffic36.com and we'll help.</p>
+            <p className="flow-text">You've used all your license checks. Call or text us at (646) 397-3139 and we'll help.</p>
           )}
           {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error}</span></div>}
         </>
