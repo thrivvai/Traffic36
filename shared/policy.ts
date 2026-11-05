@@ -36,7 +36,7 @@ export const POLICY = {
    * The rental agreement renters accept at checkout. Bump the version whenever the text changes.
    * DECISION: the text is a draft until a lawyer reviews it.
    */
-  agreementVersion: "2026-11-03-draft",
+  agreementVersion: "2026-11-04-draft",
 
   /** Cleaning and inspection buffer between trips on the same car. DECISION: 2 hours is a placeholder. */
   turnaroundMinutes: 120,
@@ -53,8 +53,14 @@ export const POLICY = {
   /** No renter under this age, whatever the car. Per-car minimums live on each vehicle. CONFIRM with Roamly. */
   minAgeFloor: 21,
 
-  /** Lockbox code is revealed this long before pickup. */
+  /** The pickup pass, with the lockbox code, opens this long before pickup. */
   passWindowMinutes: 60,
+
+  /** The pass stays open this long after the return time, so the renter can put the key back. */
+  passCloseAfterReturnMinutes: 120,
+
+  /** The host console flags confirmed trips with no pickup plan this close to pickup. */
+  handoffWarningHours: 24,
 
   /** Pickup and return times offered in the booking form, local time. */
   firstSlot: "07:00",

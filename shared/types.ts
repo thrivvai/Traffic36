@@ -151,6 +151,24 @@ export type PaymentInstructions = {
   chime: { phone: string } | null;
 };
 
+/** How a confirmed trip is handed over. */
+export type Handoff = "lockbox" | "in_person" | "delivery";
+
+/**
+ * The renter's pickup pass. It opens shortly before pickup and stays open until a little after
+ * the return time, so the same code returns the key. `code` is only filled while it's open.
+ */
+export type PickupPass = {
+  handoff: Handoff | null;
+  opensAt: string;
+  closesAt: string;
+  open: boolean;
+  code: string | null;
+  /** The host's note for this trip, like where the car is parked. Only while the pass is open. */
+  note: string | null;
+  instructions: string | null;
+};
+
 export type Booking = {
   code: string;
   status: BookingStatus;
@@ -172,6 +190,8 @@ export type Booking = {
   payment: PaymentInstructions | null;
   confirmedAt: string | null;
   createdAt: string;
+  /** Present once the booking is confirmed. */
+  pass: PickupPass | null;
 };
 
 export type CreateBookingRequest = QuoteRequest & { deliveryAddress?: string; agreementVersion: string };
@@ -179,6 +199,7 @@ export type CreateBookingRequest = QuoteRequest & { deliveryAddress?: string; ag
 /** A booking in the host console, with what the host needs to check a payment. */
 export type HostBooking = Booking & {
   renter: {
+    id: string;
     accountName: string;
     verifiedName: string | null;
     email: string | null;
@@ -190,6 +211,62 @@ export type HostBooking = Booking & {
   /** Things to look at before confirming, in plain words. */
   warnings: string[];
   refundedCents: number;
+  handoff: {
+    method: Handoff | null;
+    /** The lockbox code, for the host's eyes. */
+    code: string | null;
+    note: string | null;
+    setAt: string | null;
+    /** When the renter first opened their pass with this code. */
+    revealedAt: string | null;
+    opensAt: string;
+    closesAt: string;
+  };
+};
+
+export type PaymentEntry = {
+  bookingCode: string;
+  kind: "booking_charge" | "extension_charge" | "deposit_refund" | "cancellation_refund" | "late_payment_refund";
+  amountCents: number;
+  method: string;
+  note: string | null;
+  at: string;
+};
+
+export type ActivityEntry = { action: string; at: string; details: Record<string, unknown> };
+
+export type HostBookingDetail = HostBooking & { payments: PaymentEntry[]; activity: ActivityEntry[] };
+
+export type RenterSummary = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  licenseStatus: IdentityState;
+  trips: number;
+  lastTripAt: string | null;
+  joinedAt: string;
+  doNotRent: boolean;
+};
+
+export type RenterProfile = RenterSummary & {
+  accountName: string;
+  verifiedName: string | null;
+  dob: string | null;
+  age: number | null;
+  licenseState: string | null;
+  licenseExpiresOn: string | null;
+  licenseLast4: string | null;
+  licenseApprovedAt: string | null;
+  doNotRentNote: string | null;
+  licenses: (LicenseDetails & {
+    submittedAt: string;
+    status: "pending" | "approved" | "rejected" | "replaced";
+    reviewNote: string | null;
+    documents: { kind: IdDocumentKind; url: string }[];
+  })[];
+  bookings: HostBooking[];
+  payments: PaymentEntry[];
 };
 
 export type HostDashboard = {

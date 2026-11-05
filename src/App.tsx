@@ -5,7 +5,10 @@ import { Header } from "./components/Header.tsx";
 import { AgreementPage } from "./pages/AgreementPage.tsx";
 import { CheckoutPage } from "./pages/CheckoutPage.tsx";
 import { Home } from "./pages/Home.tsx";
+import { HostBookingPage } from "./pages/HostBookingPage.tsx";
 import { HostPage } from "./pages/HostPage.tsx";
+import { HostRenterPage } from "./pages/HostRenterPage.tsx";
+import { HostRentersPage } from "./pages/HostRentersPage.tsx";
 import { LicensePage } from "./pages/LicensePage.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
 import { TripPage } from "./pages/TripPage.tsx";
@@ -31,6 +34,9 @@ export function App() {
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/trips/:code" element={<TripPage />} />
           <Route path="/host" element={<HostPage />} />
+          <Route path="/host/renters" element={<HostRentersPage />} />
+          <Route path="/host/renters/:id" element={<HostRenterPage />} />
+          <Route path="/host/bookings/:code" element={<HostBookingPage />} />
           <Route path="/license" element={<LicensePage />} />
           <Route path="/agreement" element={<AgreementPage />} />
           <Route path="*" element={<NotFound />} />

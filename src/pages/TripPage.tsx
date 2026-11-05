@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { POLICY } from "../../shared/policy.ts";
 import type { Booking, PaymentMethod } from "../../shared/types.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { Icon } from "../components/Icon.tsx";
+import { Panel } from "../components/Panel.tsx";
+import { PickupPass, passPending } from "../components/PickupPass.tsx";
 import { ProofImage } from "../components/ProofImage.tsx";
 import { StatusPill } from "../components/StatusPill.tsx";
 import { TripCard } from "../components/TripCard.tsx";
@@ -47,6 +49,30 @@ export function TripPage() {
     return () => clearInterval(id);
   }, [booking?.status, account.api, code]);
 
+  // The pickup pass: fetch it the moment it opens, keep checking while the host is still setting
+  // it up, and refresh whenever the renter comes back to this tab (the host may have changed the code).
+  const opensAt = booking?.pass?.opensAt;
+  const passOpen = booking?.pass?.open;
+  const pending = booking ? passPending(booking) : false;
+  useEffect(() => {
+    if (!opensAt) return;
+    const refresh = () => account.api.booking(code).then(setBooking, () => undefined);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    if (!passOpen) {
+      const wait = Date.parse(opensAt) - Date.now();
+      // If this device's clock runs ahead of ours, try again shortly rather than in a tight loop.
+      if (wait < 2 ** 31 - 1) timers.push(setTimeout(refresh, wait > 0 ? wait + 1500 : 30_000));
+    }
+    const poll = pending ? setInterval(refresh, 60_000) : null;
+    const onVisible = () => document.visibilityState === "visible" && void refresh();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      timers.forEach(clearTimeout);
+      if (poll) clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [opensAt, passOpen, pending, account.api, code]);
+
   if (session.status === "signed-out") return <SignInPrompt what="this trip" />;
   if (state.status === "error") {
     const missing = state.error instanceof RequestError && state.error.status === 404;
@@ -81,13 +107,13 @@ export function TripPage() {
           {(b.status === "confirmed" || b.status === "active") && <ConfirmedPanel booking={b} />}
           {b.status === "expired" && (
             <Panel icon="clock" title="This hold ran out">
-              <p>The dates were held for {POLICY.holdMinutes} minutes and no payment screenshot came in. If you already paid, message us at admin@traffic36.com with your booking code and we'll sort it out.</p>
+              <p>The dates were held for {POLICY.holdMinutes} minutes and no payment screenshot came in. If you already paid, call or text us at (646) 397-3139 with your booking code and we'll sort it out.</p>
               <Link className="btn btn-heat" to={`/cars/${b.vehicle.slug}`}>Book this car again</Link>
             </Panel>
           )}
           {b.status === "cancelled" && (
             <Panel icon="x" title="This booking was cancelled">
-              <p>If you paid for it, we'll send the money back to the account you paid from. Questions? Message us at admin@traffic36.com.</p>
+              <p>If you paid for it, we'll send the money back to the account you paid from. Questions? Call or text us at (646) 397-3139.</p>
             </Panel>
           )}
           {(b.status === "returned" || b.status === "closed") && (
@@ -111,15 +137,6 @@ export function TripPage() {
         />
       </div>
     </div>
-  );
-}
-
-function Panel({ icon, title, children, tone }: { icon: Parameters<typeof Icon>[0]["name"]; title: string; children: ReactNode; tone?: "ok" | "warn" }) {
-  return (
-    <section className={`panel${tone ? ` ${tone}` : ""}`}>
-      <h2><Icon name={icon} size={18} />{title}</h2>
-      {children}
-    </section>
   );
 }
 
@@ -368,7 +385,7 @@ function ReviewPanel({ booking, onChange }: { booking: Booking; onChange: (b: Bo
 
 function ConfirmedPanel({ booking }: { booking: Booking }) {
   const pickup = booking.pickup;
-  return (
+  const booked = (
     <Panel icon="check" title="You're booked" tone="ok">
       <p>Payment received. See you {formatWhen(booking.start)}.</p>
       <ul className="flow-facts">
@@ -377,10 +394,21 @@ function ConfirmedPanel({ booking }: { booking: Booking }) {
         ) : (
           <li><Icon name="pin" size={15} />We'll deliver the car to {pickup.address}.</li>
         )}
-        <li><Icon name="lock" size={15} />Your pickup pass, with the lockbox code, opens here {POLICY.passWindowMinutes} minutes before pickup.</li>
         <li><Icon name="id" size={15} />Bring the driver's license you verified.</li>
         <li><Icon name="fuel" size={15} />Return the car to {booking.returnTo.name} by {formatWhen(booking.end)}, at the fuel level you got it.</li>
       </ul>
     </Panel>
+  );
+  // Once the pass is open it's the thing the renter came for, so it goes first.
+  return booking.pass?.open ? (
+    <>
+      <PickupPass booking={booking} />
+      {booked}
+    </>
+  ) : (
+    <>
+      {booked}
+      <PickupPass booking={booking} />
+    </>
   );
 }

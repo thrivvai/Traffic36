@@ -21,6 +21,8 @@ const PATHS = {
   external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
   dollar: "M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3 2 2.6 4.5 3 4.5 1.3 4.5 3-2 3-4.5 3-4.5-1.3-4.5-3",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
+  key: "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

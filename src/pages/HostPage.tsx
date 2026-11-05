@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { POLICY } from "../../shared/policy.ts";
-import type { HostBooking, HostDashboard, IdDocumentKind, LicenseReview, PaymentMethod, RejectReason } from "../../shared/types.ts";
+import type { HostBooking, HostDashboard, IdDocumentKind, LicenseReview, RejectReason } from "../../shared/types.ts";
 import { US_LICENSE_STATES } from "../../shared/usStates.ts";
+import { HostTabs, METHOD_NAMES } from "../components/HostKit.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { ProofImage } from "../components/ProofImage.tsx";
 import { StatusPill } from "../components/StatusPill.tsx";
@@ -11,8 +12,6 @@ import type { HostActionBody } from "../lib/api.ts";
 import { formatPhone, formatWhen, money } from "../lib/format.ts";
 import { useSession } from "../lib/session.tsx";
 import { SignInPrompt } from "./TripsPage.tsx";
-
-const METHOD_NAMES: Record<PaymentMethod, string> = { cash_app: "Cash App", chime: "Chime" };
 
 export function HostPage() {
   const session = useSession();
@@ -75,6 +74,7 @@ export function HostPage() {
 
   return (
     <div className="page host">
+      <HostTabs />
       <div className="host-head">
         <h1 className="page-title">Host console</h1>
         <button className="btn btn-ghost btn-sm" onClick={() => void load()}>
@@ -97,7 +97,7 @@ export function HostPage() {
       </Section>
 
       <Section title="Upcoming trips" count={data.upcoming.length} empty="No confirmed trips coming up.">
-        {data.upcoming.map((b) => <MiniRow key={b.code} b={b} />)}
+        {data.upcoming.map((b) => <MiniRow key={b.code} b={b} plan />)}
       </Section>
 
       <Section title="Holding for payment" count={data.awaitingPayment.length} empty="No one is mid-checkout right now.">
@@ -138,7 +138,14 @@ function Who({ b }: { b: HostBooking }) {
   const r = b.renter;
   return (
     <dl className="kv">
-      <div><dt>License name</dt><dd>{r.verifiedName ?? "Not verified"}{r.licenseState ? ` · ${r.licenseState}` : ""}{r.licenseLast4 ? ` · ends ${r.licenseLast4}` : ""}</dd></div>
+      <div>
+        <dt>Renter</dt>
+        <dd>
+          <Link className="link" to={`/host/renters/${r.id}`}>{r.verifiedName ?? r.accountName}</Link>
+          {r.verifiedName ? "" : " (license not approved)"}
+          {r.licenseState ? ` · ${r.licenseState}` : ""}{r.licenseLast4 ? ` · ends ${r.licenseLast4}` : ""}
+        </dd>
+      </div>
       <div>
         <dt>Contact</dt>
         <dd>
@@ -170,7 +177,7 @@ function ReviewCard({ b, act }: { b: HostBooking; act: Act }) {
       </div>
       <div className="hcard-body">
         <div className="hcard-top">
-          <span className="mono">{b.code}</span>
+          <Link className="mono link muted" to={`/host/bookings/${b.code}`}>{b.code}</Link>
           <StatusPill status={b.status} />
         </div>
         <div className="hcard-amount">{money(b.totalCents)}<span>by {latest ? METHOD_NAMES[latest.method] : "?"} from <b>{latest?.senderName ?? "?"}</b></span></div>
@@ -309,7 +316,7 @@ function LicenseCard({ l, onDone }: { l: LicenseReview; onDone: (d: HostDashboar
           <span>Sent {formatWhen(l.submittedAt)}</span>
           {l.previousRejections > 0 && <span className="status warn">Rejected {l.previousRejections}x before</span>}
         </div>
-        <div className="hcard-amount lic-name">{l.legalName}<span>age {l.age} · account “{l.accountName}”</span></div>
+        <div className="hcard-amount lic-name">{l.legalName}<span>age {l.age} · account “{l.accountName}” · <Link className="link muted" to={`/host/renters/${l.userId}`}>Profile</Link></span></div>
         <dl className="kv">
           <div>
             <dt>Contact</dt>
@@ -397,7 +404,7 @@ function DepositCard({ b, act }: { b: HostBooking; act: Act }) {
   return (
     <article className="hcard compact">
       <div className="hcard-body">
-        <div className="hcard-top"><span className="mono">{b.code}</span><span className="fine">Ended {formatWhen(b.end)}</span></div>
+        <div className="hcard-top"><Link className="mono link muted" to={`/host/bookings/${b.code}`}>{b.code}</Link><span className="fine">Ended {formatWhen(b.end)}</span></div>
         <p className="hcard-trip">{b.renter.verifiedName ?? b.renter.accountName} · {b.vehicle.make} {b.vehicle.model} · paid by {b.paymentMethod ? METHOD_NAMES[b.paymentMethod] : "?"}</p>
         <div className="deposit-row">
           <div className={`field${error?.field === "refundCents" ? " invalid" : ""}`}>
@@ -422,14 +429,24 @@ function DepositCard({ b, act }: { b: HostBooking; act: Act }) {
   );
 }
 
-function MiniRow({ b, note }: { b: HostBooking; note?: string }) {
+/** What the host still has to do to hand the car over, in two or three words. */
+function planLabel(b: HostBooking): [string, "ok" | "warn" | "muted"] {
+  const h = b.handoff;
+  if (h.method === "delivery") return ["Delivery", "muted"];
+  if (h.method === "in_person") return ["Meeting in person", "ok"];
+  if (h.method === "lockbox") return h.code ? [h.revealedAt ? "Code opened" : "Code set", "ok"] : ["Add lockbox code", "warn"];
+  return ["Add pickup plan", b.warnings.length ? "warn" : "muted"];
+}
+
+function MiniRow({ b, note, plan }: { b: HostBooking; note?: string; plan?: boolean }) {
+  const [label, tone] = planLabel(b);
   return (
-    <div className="minirow">
+    <Link className="minirow" to={`/host/bookings/${b.code}`}>
       <span className="mono">{b.code}</span>
       <span>{b.renter.verifiedName ?? b.renter.accountName}</span>
       <span>{b.vehicle.make} {b.vehicle.model}</span>
       <span>{formatWhen(b.start)}</span>
-      <span className="fine">{note ?? (b.pickup.kind === "delivery" ? "Delivery" : b.pickup.location.name)}</span>
-    </div>
+      {plan ? <span className={`status ${tone}`}>{label}</span> : <span className="fine">{note ?? (b.pickup.kind === "delivery" ? "Delivery" : b.pickup.location.name)}</span>}
+    </Link>
   );
 }

@@ -3,6 +3,7 @@ import { paymentConfigFromEnv, type PaymentConfig } from "./bookings.ts";
 import { db, type TxDb } from "./db.ts";
 import { env } from "./env.ts";
 import { stripeIdentity, type IdentityProvider } from "./identity.ts";
+import { codeKeyFromEnv } from "./handoff.ts";
 import { idCheckMode } from "./licenseReview.ts";
 import { blobIdentityStore, blobProofStore, type ProofStore } from "./proofs.ts";
 import type { IdCheckMode } from "../shared/types.ts";
@@ -19,6 +20,8 @@ export type Services = {
   /** Who checks licenses: the host from photos ("manual"), or Stripe. */
   idCheck: IdCheckMode;
   payments: PaymentConfig;
+  /** Unlocks stored lockbox codes (ACCESS_CODE_KEY). Null when it isn't set up. */
+  codeKey: Buffer | null;
   hostEmails: string[];
   now(): Date;
 };
@@ -33,6 +36,7 @@ export function services(): Services {
     ...providers,
     idCheck: idCheckMode(),
     payments: paymentConfigFromEnv(),
+    codeKey: codeKeyFromEnv(),
     hostEmails: parseHostEmails(env("HOST_EMAILS")),
     now: () => new Date(),
   };

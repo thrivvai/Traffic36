@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { SUPPORT } from "../../shared/contact.ts";
 import { Wordmark } from "./Wordmark.tsx";
 
 export function Footer() {
@@ -17,9 +18,10 @@ export function Footer() {
           </ul>
         </div>
         <div>
-          <h2>Contact</h2>
+          <h2>Customer service</h2>
           <ul>
-            <li><a href="mailto:admin@traffic36.com">admin@traffic36.com</a></li>
+            <li><a href={`tel:${SUPPORT.e164}`}>Call {SUPPORT.phone}</a></li>
+            <li><a href={`sms:${SUPPORT.e164}`}>Text us</a></li>
           </ul>
         </div>
       </div>

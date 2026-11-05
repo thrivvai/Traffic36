@@ -135,7 +135,7 @@ export function clerkAuth(opts: { fetch?: typeof fetch; publishableKey?: string 
       const secretKey = requireEnv("CLERK_SECRET_KEY");
       if (!secretKey.startsWith("sk_")) {
         console.error('CLERK_SECRET_KEY should start with "sk_". Copy the Secret key (not the Publishable key) from Clerk: Traffic36 > API keys.');
-        throw new HttpError(503, "Sign-in is temporarily unavailable. Try again later or message us at admin@traffic36.com.");
+        throw new HttpError(503, "Sign-in is temporarily unavailable. Try again later or call or text us at (646) 397-3139.");
       }
       client ??= createClerkClient({ secretKey });
       const user = await client.users.getUser(clerkUserId);

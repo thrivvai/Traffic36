@@ -7,11 +7,13 @@ import { priceTrip, type TripInput } from "./quote.ts";
 import { sniffImage, type ProofStore } from "./proofs.ts";
 import { canBook, licenseCurrent, type UserRecord } from "./users.ts";
 import { pendingLicenses } from "./licenseReview.ts";
+import { markRevealed, openCode, passFor, passWindow } from "./handoff.ts";
 import { MINUTE, POLICY } from "../shared/policy.ts";
 import { ageAt, formatMoney, validThrough } from "../shared/pricing.ts";
 import type {
   Booking,
   BookingStatus,
+  Handoff,
   HostBooking,
   Location,
   PaymentInstructions,
@@ -25,7 +27,12 @@ import type {
 // ---------------------------------------------------------------------------------------------
 
 /** Where renters send money. Set in Netlify (CASHAPP_CASHTAG, CHIME_PHONE) so it stays out of the code. */
-export type PaymentConfig = { cashtag: string | null; chimePhone: string | null };
+export type PaymentConfig = {
+  cashtag: string | null;
+  chimePhone: string | null;
+  /** Unlocks stored lockbox codes. Absent in contexts that never show one. */
+  codeKey?: Buffer | null;
+};
 
 export function paymentConfigFromEnv(): PaymentConfig {
   const tag = env("CASHAPP_CASHTAG");
@@ -93,6 +100,12 @@ type Row = {
   r_identity: string;
   r_dob: string | null;
   r_expires: string | null;
+  handoff: Handoff | null;
+  handoff_note: string | null;
+  ac_code: string | null;
+  ac_revealed: Date | null;
+  ac_updated: Date | null;
+  pickup_instructions: string | null;
 };
 
 const loc = (alias: string) => `json_build_object(
@@ -111,12 +124,15 @@ const SELECT = `
          ${loc("rl")} AS return_loc,
          u.name AS r_name, u.identity_name AS r_verified, u.email AS r_email, u.phone AS r_phone,
          u.license_state AS r_state, u.license_last4 AS r_last4, u.identity_status AS r_identity,
-         u.identity_dob::text AS r_dob, u.license_expires_on::text AS r_expires
+         u.identity_dob::text AS r_dob, u.license_expires_on::text AS r_expires,
+         b.handoff, b.handoff_note, ac.code_ciphertext AS ac_code, ac.revealed_at AS ac_revealed, ac.updated_at AS ac_updated,
+         pl.instructions AS pickup_instructions
     FROM bookings b
     JOIN vehicles v ON v.id = b.vehicle_id
     LEFT JOIN lots pl ON pl.id = b.pickup_lot_id
     JOIN lots rl ON rl.id = b.return_lot_id
-    JOIN users u ON u.id = b.renter_id`;
+    JOIN users u ON u.id = b.renter_id
+    LEFT JOIN access_codes ac ON ac.booking_id = b.id AND ac.purpose = 'pickup'`;
 
 type ProofRow = {
   id: string;
@@ -178,6 +194,19 @@ function toBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date): B
     payment: unpaid ? instructions(cfg, r.code, r.charge_cents) : null,
     confirmedAt: r.confirmed_at?.toISOString() ?? null,
     createdAt: r.created_at.toISOString(),
+    pass: passFor(
+      {
+        status,
+        startsAt: r.starts_at,
+        endsAt: r.ends_at,
+        handoff: r.handoff ?? (r.delivery_address ? "delivery" : null),
+        sealedCode: r.ac_code,
+        note: r.handoff_note,
+        instructions: r.pickup_instructions,
+      },
+      cfg.codeKey ?? null,
+      now,
+    ),
   };
 }
 
@@ -209,6 +238,10 @@ function warningsFor(r: Row, proofs: ProofRow[], now: Date): string[] {
   }
   if (r.delivery_address) out.push(`Delivery to ${r.delivery_address}. Confirming approves this address.`);
   const hoursToPickup = (r.starts_at.getTime() - now.getTime()) / (60 * MINUTE);
+  if (r.status === "confirmed" && !r.delivery_address && hoursToPickup < POLICY.handoffWarningHours && r.ends_at > now) {
+    if (!r.handoff) out.push("No pickup plan yet. Add the lockbox code, or choose to meet the renter in person.");
+    else if (r.handoff === "lockbox" && !r.ac_code) out.push("Lockbox is chosen but the code isn't set.");
+  }
   if (r.status === "payment_review" && hoursToPickup < 6) {
     out.push(hoursToPickup > 0 ? `Pickup is in ${Math.max(1, Math.round(hoursToPickup))} hour${Math.round(hoursToPickup) === 1 ? "" : "s"}.` : "The pickup time has passed.");
   }
@@ -219,6 +252,7 @@ function toHostBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date
   return {
     ...toBooking(r, proofs, cfg, now),
     renter: {
+      id: r.renter_id,
       accountName: r.r_name,
       verifiedName: r.r_verified,
       email: r.r_email,
@@ -229,6 +263,17 @@ function toHostBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date
     },
     warnings: warningsFor(r, proofs, now),
     refundedCents: r.refunded_cents,
+    handoff: {
+      method: r.handoff ?? (r.delivery_address ? "delivery" : null),
+      code: r.ac_code && cfg.codeKey ? openCode(r.ac_code, cfg.codeKey) : null,
+      note: r.handoff_note,
+      setAt: r.ac_updated?.toISOString() ?? null,
+      revealedAt: r.ac_revealed?.toISOString() ?? null,
+      ...(() => {
+        const w = passWindow(r.starts_at, r.ends_at);
+        return { opensAt: w.opensAt.toISOString(), closesAt: w.closesAt.toISOString() };
+      })(),
+    },
   };
 }
 
@@ -246,7 +291,10 @@ async function ownRow(db: Db, user: UserRecord, code: string, lock = false): Pro
 
 export async function getBooking(db: Db, cfg: PaymentConfig, user: UserRecord, code: string, now: Date): Promise<Booking> {
   const row = await ownRow(db, user, code);
-  return toBooking(row, (await proofsFor(db, [row])).get(row.id) ?? [], cfg, now);
+  const booking = toBooking(row, (await proofsFor(db, [row])).get(row.id) ?? [], cfg, now);
+  // The host can see when the renter first opened their code.
+  if (booking.pass?.code && !row.ac_revealed) await markRevealed(db, row.id, now);
+  return booking;
 }
 
 export async function listBookings(db: Db, cfg: PaymentConfig, user: UserRecord, now: Date): Promise<Booking[]> {
@@ -274,10 +322,10 @@ export async function createBooking(
   meta: { ip: string | null; now: Date },
 ): Promise<{ code: string }> {
   const { now } = meta;
-  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Message us at admin@traffic36.com.");
+  if (user.doNotRent) throw new HttpError(403, "We can't take bookings for this account. Call or text us at (646) 397-3139.");
   if (!enabledMethods(cfg).length) {
     console.error("No payment method configured. Set CASHAPP_CASHTAG and/or CHIME_PHONE in Netlify.");
-    throw new HttpError(503, "Booking is temporarily unavailable. Try again later or message us at admin@traffic36.com.");
+    throw new HttpError(503, "Booking is temporarily unavailable. Try again later or call or text us at (646) 397-3139.");
   }
   if (input.agreementVersion !== POLICY.agreementVersion) {
     throw badRequest("Read and agree to the rental agreement to continue.", "agreement");
@@ -402,7 +450,7 @@ export async function submitProof(
     throw new HttpError(409, "This booking is already paid and confirmed.");
   }
   if (row.status === "cancelled" || row.status === "expired") {
-    throw new HttpError(409, "This booking was cancelled. If you already paid, message us at admin@traffic36.com and we'll sort it out.");
+    throw new HttpError(409, "This booking was cancelled. If you already paid, call or text us at (646) 397-3139 and we'll sort it out.");
   }
   const { rows: count } = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM payment_proofs WHERE booking_id = $1`, [row.id]);
   if ((count[0]?.n ?? 0) >= POLICY.maxProofsPerBooking) {
@@ -464,12 +512,23 @@ export async function readProof(
 // Host
 // ---------------------------------------------------------------------------------------------
 
+/** Bookings as the host sees them. `where` and `order` are fixed SQL from this codebase; values go in `params`. */
+export async function hostBookings(
+  db: Db,
+  cfg: PaymentConfig,
+  now: Date,
+  where: string,
+  order: string,
+  params: unknown[] = [],
+  limit = 50,
+): Promise<HostBooking[]> {
+  const { rows } = await db.query<Row>(`${SELECT} WHERE ${where} ORDER BY ${order} LIMIT ${Math.trunc(limit)}`, params);
+  const proofs = await proofsFor(db, rows);
+  return rows.map((r) => toHostBooking(r, proofs.get(r.id) ?? [], cfg, now));
+}
+
 export async function hostDashboard(db: Db, cfg: PaymentConfig, now: Date) {
-  const list = async (where: string, order: string, params: unknown[] = []) => {
-    const { rows } = await db.query<Row>(`${SELECT} WHERE ${where} ORDER BY ${order} LIMIT 50`, params);
-    const proofs = await proofsFor(db, rows);
-    return rows.map((r) => toHostBooking(r, proofs.get(r.id) ?? [], cfg, now));
-  };
+  const list = (where: string, order: string, params: unknown[] = []) => hostBookings(db, cfg, now, where, order, params);
   const [licenses, review, awaitingPayment, upcoming, depositsDue] = await Promise.all([
     pendingLicenses(db, now),
     list(`b.status = 'payment_review'`, `b.starts_at`),
@@ -536,7 +595,9 @@ export async function confirmPayment(
       throw new HttpError(409, "These dates now overlap another trip. Reject this payment and send the money back, or agree new dates with the renter.");
     }
     await tx.query(
-      `UPDATE bookings SET status = 'confirmed', confirmed_at = $2, paid_at = $2, review_reasons = '{}', payment_note = NULL WHERE id = $1`,
+      `UPDATE bookings SET status = 'confirmed', confirmed_at = $2, paid_at = $2, review_reasons = '{}', payment_note = NULL,
+         handoff = CASE WHEN delivery_address IS NOT NULL THEN 'delivery' ELSE handoff END
+       WHERE id = $1`,
       [row.id, now],
     );
     await tx.query(
