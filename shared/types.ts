@@ -66,7 +66,7 @@ export type Quote = {
   conflict: { start: string; end: string } | null;
 };
 
-export type ApiError = { error: string; field?: string };
+export type ApiError = { error: string; field?: string; reason?: string };
 
 /**
  * Where the renter's license check stands.

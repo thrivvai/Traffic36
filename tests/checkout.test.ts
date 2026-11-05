@@ -41,9 +41,9 @@ afterAll(async () => {
 
 const profiles = new Map<string, ClerkProfile>();
 const auth: AuthProvider = {
-  async userIdFrom(req) {
+  async verify(req) {
     const token = req.headers.get("authorization")?.replace("Bearer ", "") ?? "";
-    return token.startsWith("token-") ? token.slice(6) : null;
+    return token.startsWith("token-") ? { ok: true, userId: token.slice(6), profile: null } : { ok: false, reason: "no-token" };
   },
   async profile(id) {
     return profiles.get(id) ?? { email: null, phone: null, name: "" };
