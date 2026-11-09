@@ -16,7 +16,7 @@ export const POLICY = {
   deliveryChoice: "delivery",
 
   /** How long a checkout holds the dates while the renter pays by Cash App or Chime and uploads proof. */
-  holdMinutes: 30,
+  holdMinutes: 90,
 
   /** A renter can hold or have in review at most this many unpaid bookings at once, so nobody can squat on dates. */
   maxOpenBookings: 2,
@@ -36,7 +36,7 @@ export const POLICY = {
    * The rental agreement renters accept at checkout. Bump the version whenever the text changes.
    * DECISION: the text is a draft until a lawyer reviews it.
    */
-  agreementVersion: "2026-11-04-draft",
+  agreementVersion: "2026-11-09-draft",
 
   /** Cleaning and inspection buffer between trips on the same car. DECISION: 2 hours is a placeholder. */
   turnaroundMinutes: 120,

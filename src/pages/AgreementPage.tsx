@@ -46,7 +46,11 @@ export function AgreementPage() {
       <h2>Using the car</h2>
       <ul>
         <li>No smoking or vaping in the car.</li>
-        <li>No rideshare, delivery or other paid driving, no racing, towing or off-road driving, and no driving outside the United States.</li>
+        <li>
+          You can drive for rideshare apps like Uber and Lyft. While you're logged into a rideshare app, that company's insurance covers the
+          trip, and you're responsible for meeting its rules for drivers and vehicles.
+        </li>
+        <li>No food or package delivery or other paid driving, no racing, towing or off-road driving, and no driving outside the United States.</li>
         <li>Obey traffic laws. You're responsible for tickets, tolls and parking fees during your trip.</li>
       </ul>
 
