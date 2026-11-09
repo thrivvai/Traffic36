@@ -128,7 +128,7 @@ export async function submitLicense(
     await tx.query(
       `UPDATE users SET identity_method = 'manual', identity_status = 'pending', identity_session_id = NULL,
          identity_name = $2, identity_dob = $3, license_state = $4, license_expires_on = $5, license_last4 = NULL,
-         identity_failure_reason = NULL, identity_verified_at = NULL
+         identity_failure_reason = NULL, identity_verified_at = NULL, archived_at = NULL, archived_by = NULL
        WHERE id = $1`,
       [user.id, details.legalName, details.dob, details.licenseState, details.licenseExpiresOn],
     );
@@ -166,7 +166,7 @@ export async function pendingLicenses(db: Db, now: Date): Promise<LicenseReview[
               WHERE b.renter_id = s.user_id AND b.status IN ('awaiting_payment', 'payment_review', 'confirmed')) AS open_bookings,
             (SELECT count(*)::int FROM identity_submissions r WHERE r.user_id = s.user_id AND r.status = 'rejected') AS rejections
        FROM identity_submissions s JOIN users u ON u.id = s.user_id
-      WHERE s.status = 'pending'
+      WHERE s.status = 'pending' AND u.archived_at IS NULL
       ORDER BY s.created_at`,
   );
   const order: IdDocumentKind[] = ["license_front", "license_back", "selfie"];

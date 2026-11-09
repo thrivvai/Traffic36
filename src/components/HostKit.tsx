@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Link, NavLink } from "react-router-dom";
 import type { ActivityEntry, IdentityState, PaymentEntry, PaymentMethod } from "../../shared/types.ts";
 import { useAccount } from "../lib/account.tsx";
-import { formatPhone, money } from "../lib/format.ts";
+import { formatPhone, formatWhen, money } from "../lib/format.ts";
 import { useSession } from "../lib/session.tsx";
 import { SignInPrompt } from "../pages/TripsPage.tsx";
 
@@ -36,6 +36,7 @@ export function HostTabs() {
     <nav className="host-tabs" aria-label="Host">
       <NavLink to="/host" end>Console</NavLink>
       <NavLink to="/host/renters">Renters</NavLink>
+      <NavLink to="/host/archive">Archive</NavLink>
     </nav>
   );
 }
@@ -76,13 +77,14 @@ const PAYMENT_KINDS: Record<PaymentEntry["kind"], string> = {
   deposit_refund: "Deposit sent back",
   cancellation_refund: "Refund for cancellation",
   late_payment_refund: "Refund for a late payment",
+  early_end_refund: "Refund for ending early",
 };
 
 const paidIn = (kind: PaymentEntry["kind"]) => kind === "booking_charge" || kind === "extension_charge";
 
 export function paymentLabel(p: PaymentEntry) {
   const via = p.method in METHOD_NAMES ? METHOD_NAMES[p.method as PaymentMethod] : p.method.replace(/_/g, " ");
-  return { title: PAYMENT_KINDS[p.kind], via, amount: `${paidIn(p.kind) ? "+" : "−"}${money(p.amountCents)}`, incoming: paidIn(p.kind) };
+  return { title: PAYMENT_KINDS[p.kind], via, amount: `${paidIn(p.kind) ? "+" : "−"}${money(Math.abs(p.amountCents))}`, incoming: paidIn(p.kind) };
 }
 
 const REJECT_REASONS: Record<string, string> = {
@@ -101,7 +103,13 @@ export function activityLabel(a: ActivityEntry): string {
     case "payment_rejected":
       return `Payment sent back: ${REJECT_REASONS[String(d.reason)] ?? "see note"}${d.note ? `. "${String(d.note)}"` : ""}`;
     case "booking_cancelled":
-      return `Booking cancelled${d.note ? `: "${String(d.note)}"` : ""}`;
+      return `Booking cancelled${d.note ? `: "${String(d.note)}"` : ""}${typeof d.refundCents === "number" && d.refundCents > 0 ? `. Refunded ${money(d.refundCents)}` : ""}`;
+    case "trip_ended_early":
+      return `Trip ended early${typeof d.scheduledEnd === "string" ? ` (booked until ${formatWhen(d.scheduledEnd)})` : ""}${typeof d.refundCents === "number" && d.refundCents > 0 ? `. Refunded ${money(d.refundCents)}` : ""}${d.note ? `. "${String(d.note)}"` : ""}`;
+    case "booking_archived":
+      return "Archived";
+    case "booking_restored":
+      return "Restored from the archive";
     case "deposit_returned":
       return `Deposit returned${typeof d.refundCents === "number" ? `, ${money(d.refundCents)}` : ""}${typeof d.keptCents === "number" && d.keptCents > 0 ? ` (kept ${money(d.keptCents)}${d.note ? ` for ${String(d.note)}` : ""})` : ""}`;
     case "handoff_set":

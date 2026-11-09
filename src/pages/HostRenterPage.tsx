@@ -58,6 +58,7 @@ function RenterRecord({ id }: { id: string }) {
       <div className="trip-head">
         <h1 className="page-title">{r.name}</h1>
         <div className="trip-meta">
+          {r.archived && <span className="status muted">Archived</span>}
           {r.doNotRent && <span className="status bad">Blocked</span>}
           <LicensePill status={r.licenseStatus} />
         </div>
@@ -85,7 +86,10 @@ function RenterRecord({ id }: { id: string }) {
                       <span className="mono">{b.code}</span>
                       <span className="rtrip-car">{b.vehicle.year} {b.vehicle.make} {b.vehicle.model}</span>
                       <span className="rtrip-when">{formatWhen(b.start)} to {formatWhen(b.end)}</span>
-                      <span className="rtrip-end"><StatusPill status={b.status} /><span className="mono">{money(b.totalCents)}</span></span>
+                      <span className="rtrip-end">
+                        <span className="rtrip-tags">{b.archivedAt && <span className="status muted">Archived</span>}<StatusPill status={b.status} /></span>
+                        <span className="mono">{money(b.totalCents)}</span>
+                      </span>
                     </Link>
                   </li>
                 ))}
@@ -129,6 +133,7 @@ function RenterRecord({ id }: { id: string }) {
             </dl>
           </Panel>
           <BookingAccess renter={r} onChange={setRenter} />
+          <ArchiveRenter renter={r} onChange={setRenter} />
         </aside>
       </div>
     </div>
@@ -229,6 +234,52 @@ function BookingAccess({ renter: r, onChange }: { renter: RenterProfile; onChang
         </>
       )}
       {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error.message}</span></div>}
+    </Panel>
+  );
+}
+
+/** Takes a renter off the host's list without deleting anything. They come back if they book again. */
+function ArchiveRenter({ renter: r, onChange }: { renter: RenterProfile; onChange: (r: RenterProfile) => void }) {
+  const account = useAccount();
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (value: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange(await account.api.archiveRenter(r.id, value));
+      setAsking(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel icon="archive" title="Archive">
+      {r.archived ? (
+        <>
+          <p>Archived. {r.name} is off your renter list and comes back on their own if they book again.</p>
+          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void save(false)}>{busy ? "Restoring…" : "Restore to renter list"}</button>
+        </>
+      ) : asking ? (
+        <div className="hcard-panel">
+          <p>This takes {r.name} off your renter list. Nothing is deleted: their license, trips and payments stay on file, and you can restore them from the Archive tab.</p>
+          <div className="hcard-actions">
+            <button className="btn btn-heat" disabled={busy} onClick={() => void save(true)}>{busy ? "Saving…" : "Archive renter"}</button>
+            <button className="btn btn-ghost" disabled={busy} onClick={() => setAsking(false)}>Back</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p>Clear test accounts and past renters from your list. Nothing is deleted.</p>
+          <button className="link muted" onClick={() => setAsking(true)}>Archive this renter</button>
+        </>
+      )}
+      {error && <div className="note bad" role="alert"><Icon name="alert" size={16} /><span>{error}</span></div>}
     </Panel>
   );
 }

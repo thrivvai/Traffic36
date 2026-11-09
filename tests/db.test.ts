@@ -78,6 +78,7 @@ describe("migrations", () => {
       "20261103070000_manual_payments",
       "20261104230000_manual_license_review",
       "20261105020000_pickup_handoff",
+      "20261108230000_host_trip_controls",
     ]);
   });
 

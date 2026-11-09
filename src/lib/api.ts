@@ -2,6 +2,7 @@ import type {
   ApiError,
   Booking,
   CreateBookingRequest,
+  HostArchive,
   HostBookingDetail,
   HostDashboard,
   IdCheckMode,
@@ -117,6 +118,12 @@ export function accountApi(getToken: TokenSource) {
       call<{ renter: RenterProfile }>(`/api/host/renters/${enc(id)}`, { signal }).then((r) => r.renter),
     blockRenter: (id: string, body: { value: boolean; note?: string }) =>
       call<{ renter: RenterProfile }>(`/api/host/renters/${enc(id)}/block`, { method: "POST", body }).then((r) => r.renter),
+    archiveRenter: (id: string, value: boolean) =>
+      call<{ renter: RenterProfile }>(`/api/host/renters/${enc(id)}/archive`, { method: "POST", body: { value } }).then((r) => r.renter),
+    /** An action taken from the booking's own record, answered with the updated record. */
+    bookingAction: (code: string, action: "cancel" | "end" | "archive" | "restore", body: HostActionBody = {}) =>
+      call<{ booking: HostBookingDetail }>(`/api/host/bookings/${enc(code)}/${action}?view=booking`, { method: "POST", body }).then((r) => r.booking),
+    hostArchive: (signal?: AbortSignal) => call<{ archive: HostArchive }>("/api/host/archive", { signal }).then((r) => r.archive),
   };
 }
 

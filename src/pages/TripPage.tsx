@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
+import { SUPPORT } from "../../shared/contact.ts";
 import { POLICY } from "../../shared/policy.ts";
 import type { Booking, PaymentMethod } from "../../shared/types.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
@@ -111,13 +112,14 @@ export function TripPage() {
               <Link className="btn btn-heat" to={`/cars/${b.vehicle.slug}`}>Book this car again</Link>
             </Panel>
           )}
-          {b.status === "cancelled" && (
-            <Panel icon="x" title="This booking was cancelled">
-              <p>If you paid for it, we'll send the money back to the account you paid from. Questions? Call or text us at (646) 397-3139.</p>
-            </Panel>
-          )}
+          {b.status === "cancelled" && <CancelledPanel booking={b} />}
           {(b.status === "returned" || b.status === "closed") && (
             <Panel icon="check" title={b.status === "closed" ? "Trip complete" : "Car returned"}>
+              {b.endedEarly && (
+                <p>Your trip ended {formatWhen(b.endedEarly.at)}, ahead of the booked return time of {formatWhen(b.endedEarly.scheduledEnd)}.</p>
+              )}
+              {b.refundedCents > 0 && <p>We've sent {money(b.refundedCents)} back to the {paidWith(b)} account you paid from.</p>}
+              {b.status === "returned" && <p>Your {money(b.depositCents)} deposit comes back after we check the car.</p>}
               <p>Thanks for driving with Traffic36.</p>
             </Panel>
           )}
@@ -137,6 +139,29 @@ export function TripPage() {
         />
       </div>
     </div>
+  );
+}
+
+const paidWith = (b: Booking) => (b.paymentMethod ? METHOD_NAMES[b.paymentMethod] : "Cash App or Chime");
+
+function CancelledPanel({ booking: b }: { booking: Booking }) {
+  const releasedByRenter = !b.cancelReason && !b.confirmedAt && b.proofs.length === 0;
+  return (
+    <Panel icon="x" title="This booking was cancelled">
+      {releasedByRenter ? (
+        <p>You released these dates before paying, so nothing was charged.</p>
+      ) : (
+        <>
+          {b.cancelReason && <p>Reason: {b.cancelReason}</p>}
+          {b.refundedCents > 0 ? (
+            <p>We've sent {money(b.refundedCents)} back to the {paidWith(b)} account you paid from.</p>
+          ) : (
+            <p>If you paid for it, we'll send the money back to the account you paid from.</p>
+          )}
+          <p>Questions? Call or text us at <a className="link nowrap" href={`tel:${SUPPORT.e164}`}>{SUPPORT.phone}</a>.</p>
+        </>
+      )}
+    </Panel>
   );
 }
 

@@ -7,6 +7,7 @@ import { Panel } from "../components/Panel.tsx";
 import { ProofImage } from "../components/ProofImage.tsx";
 import { StatusPill } from "../components/StatusPill.tsx";
 import { TripCard } from "../components/TripCard.tsx";
+import { ArchivedBanner, TripControls } from "../components/TripControls.tsx";
 import { useAccount } from "../lib/account.tsx";
 import { RequestError } from "../lib/api.ts";
 import { formatWhen, money } from "../lib/format.ts";
@@ -60,6 +61,22 @@ function BookingRecord({ code }: { code: string }) {
       </div>
       <div className="checkout">
         <div className="trip-main">
+          <ArchivedBanner booking={b} onChange={setBooking} />
+          {b.status === "cancelled" && (
+            <div className="note">
+              <Icon name="x" size={16} />
+              <span>
+                {b.cancelReason ? `Cancelled: ${b.cancelReason}` : "The renter released these dates before paying."}
+                {b.refundedCents > 0 ? ` Refunded ${money(b.refundedCents)}.` : ""}
+              </span>
+            </div>
+          )}
+          {b.endedEarly && (
+            <div className="note">
+              <Icon name="clock" size={16} />
+              <span>Ended early {formatWhen(b.endedEarly.at)}. It was booked until {formatWhen(b.endedEarly.scheduledEnd)}.</span>
+            </div>
+          )}
           {b.warnings.length > 0 && (
             <ul className="warns">
               {b.warnings.map((w) => <li key={w}><Icon name="alert" size={15} />{w}</li>)}
@@ -76,6 +93,7 @@ function BookingRecord({ code }: { code: string }) {
           )}
 
           <HandoffPanel booking={b} onSaved={setBooking} />
+          <TripControls booking={b} onChange={setBooking} />
 
           <Panel icon="user" title="Renter">
             <dl className="kv">
@@ -158,6 +176,7 @@ function HandoffPanel({ booking: b, onSaved }: { booking: HostBookingDetail; onS
   const editable = (b.status === "confirmed" || b.status === "active") && b.pickup.kind === "location" && !ended;
   const [editing, setEditing] = useState(editable && !h.method);
 
+  if (b.status === "cancelled" || b.status === "expired") return null;
   if (b.pickup.kind === "delivery") {
     return (
       <Panel icon="key" title="Pickup: delivery">

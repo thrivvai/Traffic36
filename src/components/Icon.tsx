@@ -23,6 +23,8 @@ const PATHS = {
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
   key: "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  archive: "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
+  sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
 } as const;
 
 export type IconName = keyof typeof PATHS;

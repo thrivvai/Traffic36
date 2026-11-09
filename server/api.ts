@@ -9,19 +9,21 @@ import {
   confirmPayment,
   createBooking,
   enabledMethods,
+  endTripEarly,
   getBooking,
   hostDashboard,
   listBookings,
   readProof,
   rejectPayment,
   returnDeposit,
+  setBookingArchived,
   submitProof,
 } from "./bookings.ts";
 import { HttpError, badRequest, json, readJson, route } from "./http.ts";
 import { identityWebhook, refreshIdentity, startIdentity } from "./identity.ts";
 import { approveLicense, readIdDocument, rejectLicense, submitLicense, uploadIdDocument } from "./licenseReview.ts";
 import { setHandoff } from "./handoff.ts";
-import { hostBookingDetail, listRenters, renterProfile, setDoNotRent } from "./hostRenters.ts";
+import { hostArchive, hostBookingDetail, listRenters, renterProfile, setDoNotRent, setRenterArchived } from "./hostRenters.ts";
 import type { Services } from "./services.ts";
 import { publicMe, requireHost, requireUser } from "./users.ts";
 
@@ -212,13 +214,25 @@ export const hostRentersHandler = (get: Get) =>
     return json({ renters: await listRenters(s.db, new URL(req.url).searchParams.get("q") ?? "", s.now()) });
   });
 
-/** POST /api/host/renters/:id/block { value, note } */
-export const hostRenterBlockHandler = (get: Get) =>
+/** POST /api/host/renters/:id/:action where action is block { value, note } or archive { value }. */
+export const hostRenterActionHandler = (get: Get) =>
   route(["POST"], async (req, params) => {
     const s = get();
     const host = await requireHost(req, deps(s));
-    await setDoNotRent(s.db, host, params.id ?? "", await readJson(req));
-    return json({ renter: await renterProfile(s.db, view(s), params.id ?? "", s.now()) });
+    const id = params.id ?? "";
+    const body = await readJson(req);
+    if (params.action === "block") await setDoNotRent(s.db, host, id, body);
+    else if (params.action === "archive") await setRenterArchived(s.db, host, id, body, s.now());
+    else throw new HttpError(404, "Unknown action.");
+    return json({ renter: await renterProfile(s.db, view(s), id, s.now()) });
+  });
+
+/** GET /api/host/archive: bookings and renters the host has cleared from their lists. */
+export const hostArchiveHandler = (get: Get) =>
+  route(["GET"], async (req) => {
+    const s = get();
+    await requireHost(req, deps(s));
+    return json({ archive: await hostArchive(s.db, view(s), s.now()) });
   });
 
 /** GET /api/host/bookings/:code, the full record of one booking. */
@@ -229,15 +243,23 @@ export const hostBookingHandler = (get: Get) =>
     return json({ booking: await hostBookingDetail(s.db, view(s), params.code ?? "", s.now()) });
   });
 
-/** POST /api/host/bookings/:code/:action where action is confirm, reject, cancel or deposit. */
+/** Actions taken from a booking's own record, which answer with that record. */
+const RECORD_ACTIONS = new Set(["handoff", "end", "archive", "restore"]);
+
+/**
+ * POST /api/host/bookings/:code/:action where action is confirm, reject, cancel, deposit, handoff,
+ * end, archive or restore. Answers with the host console, or with the booking's record for actions
+ * taken there (and for any action when called with ?view=booking).
+ */
 export const hostActionHandler = (get: Get) =>
   route(["POST"], async (req, params) => {
     const s = get();
     const host = await requireHost(req, deps(s));
     const code = params.code ?? "";
+    const action = params.action ?? "";
     const body = await readJson(req);
     const now = s.now();
-    switch (params.action) {
+    switch (action) {
       case "confirm":
         await confirmPayment(s.db, host, code, body, now);
         break;
@@ -252,9 +274,19 @@ export const hostActionHandler = (get: Get) =>
         break;
       case "handoff":
         await setHandoff(s.db, s.codeKey, host, code, body, now);
-        return json({ booking: await hostBookingDetail(s.db, view(s), code, now) });
+        break;
+      case "end":
+        await endTripEarly(s.db, host, code, body, now);
+        break;
+      case "archive":
+      case "restore":
+        await setBookingArchived(s.db, host, code, action === "archive", now);
+        break;
       default:
         throw new HttpError(404, "Unknown action.");
+    }
+    if (RECORD_ACTIONS.has(action) || new URL(req.url).searchParams.get("view") === "booking") {
+      return json({ booking: await hostBookingDetail(s.db, view(s), code, now) });
     }
     return json({ dashboard: await hostDashboard(s.db, view(s), now) });
   });
