@@ -328,7 +328,7 @@ describe("holding dates", () => {
       rentalCents: 22500,
       depositCents: 5000,
       totalCents: 27500,
-      holdExpiresAt: new Date(clock.getTime() + 30 * MINUTE).toISOString(),
+      holdExpiresAt: new Date(clock.getTime() + POLICY.holdMinutes * MINUTE).toISOString(),
       payment: {
         amountCents: 27500,
         code: res.body.code,
@@ -357,7 +357,7 @@ describe("holding dates", () => {
     expect((await createBooking("jordan", ELANTRA)).status).toBe(201);
     const second = await createBooking("sam", ELANTRA);
     expect(second.status).toBe(409);
-    clock = new Date(clock.getTime() + 31 * MINUTE);
+    clock = new Date(clock.getTime() + (POLICY.holdMinutes + 1) * MINUTE);
     expect((await createBooking("sam", ELANTRA)).status).toBe(201);
   });
 
@@ -405,7 +405,7 @@ describe("payment screenshots", () => {
     expect(res.status).toBe(201);
     expect(res.body.booking.status).toBe("payment_review");
     expect(res.body.booking.proofs).toHaveLength(1);
-    clock = new Date(clock.getTime() + 3 * 60 * MINUTE); // long after the hold would have run out
+    clock = new Date(clock.getTime() + (POLICY.holdMinutes + 150) * MINUTE); // long after the hold would have run out
     await signUp("sam", "Sam Lee", "sam@example.com");
     await verify("sam", "1990-01-01", { name: ["Sam", "Lee"] });
     expect((await createBooking("sam", ELANTRA)).status).toBe(409);
@@ -425,7 +425,7 @@ describe("payment screenshots", () => {
   });
 
   test("a late payment is still taken in, and flagged when the dates are gone", async () => {
-    clock = new Date(clock.getTime() + 40 * MINUTE);
+    clock = new Date(clock.getTime() + (POLICY.holdMinutes + 10) * MINUTE);
     await signUp("sam", "Sam Lee", "sam@example.com");
     await verify("sam", "1990-01-01", { name: ["Sam", "Lee"] });
     expect((await createBooking("sam", ELANTRA)).status).toBe(201);
@@ -473,7 +473,7 @@ describe("host review", () => {
     expect(body.booking).toMatchObject({
       status: "awaiting_payment",
       paymentNote: "The amount we received doesn't match your total. We got $250.",
-      holdExpiresAt: new Date(clock.getTime() + 30 * MINUTE).toISOString(),
+      holdExpiresAt: new Date(clock.getTime() + POLICY.holdMinutes * MINUTE).toISOString(),
     });
     expect(body.booking.proofs[0]?.status).toBe("rejected");
     expect((await upload("jordan", code)).body.booking.status).toBe("payment_review");
