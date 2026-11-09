@@ -106,6 +106,10 @@ type Row = {
   ac_revealed: Date | null;
   ac_updated: Date | null;
   pickup_instructions: string | null;
+  cancel_reason: string | null;
+  returned_at: Date | null;
+  scheduled_end_at: Date | null;
+  archived_at: Date | null;
 };
 
 const loc = (alias: string) => `json_build_object(
@@ -126,7 +130,8 @@ const SELECT = `
          u.license_state AS r_state, u.license_last4 AS r_last4, u.identity_status AS r_identity,
          u.identity_dob::text AS r_dob, u.license_expires_on::text AS r_expires,
          b.handoff, b.handoff_note, ac.code_ciphertext AS ac_code, ac.revealed_at AS ac_revealed, ac.updated_at AS ac_updated,
-         pl.instructions AS pickup_instructions
+         pl.instructions AS pickup_instructions,
+         b.cancel_reason, b.returned_at, b.scheduled_end_at, b.archived_at
     FROM bookings b
     JOIN vehicles v ON v.id = b.vehicle_id
     LEFT JOIN lots pl ON pl.id = b.pickup_lot_id
@@ -154,6 +159,19 @@ async function proofsFor(db: Db, rows: Row[]): Promise<Map<string, ProofRow[]>> 
   );
   for (const p of proofs) byBooking.set(p.booking_id, [...(byBooking.get(p.booking_id) ?? []), p]);
   return byBooking;
+}
+
+/** Stored as the reason when a renter releases dates they hadn't paid for. */
+const RENTER_CANCEL_REASON = "Cancelled by renter before paying";
+
+/**
+ * Still in play: dates held for payment, a payment being checked, or a confirmed trip that hasn't
+ * ended. These can't be archived; they have to be cancelled or ended first.
+ */
+function isLive(r: Pick<Row, "status" | "hold_expires_at" | "ends_at">, now: Date): boolean {
+  if (r.status === "payment_review") return true;
+  if (r.status === "awaiting_payment" || r.status === "held") return !!r.hold_expires_at && r.hold_expires_at > now;
+  return (r.status === "confirmed" || r.status === "active") && r.ends_at > now;
 }
 
 /** The status a person should see. A hold that ran out reads as expired even before anything tidies it up. */
@@ -194,6 +212,9 @@ function toBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date): B
     payment: unpaid ? instructions(cfg, r.code, r.charge_cents) : null,
     confirmedAt: r.confirmed_at?.toISOString() ?? null,
     createdAt: r.created_at.toISOString(),
+    refundedCents: r.refunded_cents,
+    cancelReason: status === "cancelled" && r.cancel_reason !== RENTER_CANCEL_REASON ? r.cancel_reason : null,
+    endedEarly: r.scheduled_end_at ? { at: r.ends_at.toISOString(), scheduledEnd: r.scheduled_end_at.toISOString() } : null,
     pass: passFor(
       {
         status,
@@ -262,7 +283,13 @@ function toHostBooking(r: Row, proofs: ProofRow[], cfg: PaymentConfig, now: Date
       licenseApproved: r.r_identity === "verified",
     },
     warnings: warningsFor(r, proofs, now),
-    refundedCents: r.refunded_cents,
+    archivedAt: r.archived_at?.toISOString() ?? null,
+    can: {
+      cancel: isLive(r, now),
+      end: (r.status === "confirmed" || r.status === "active") && r.starts_at < now && r.ends_at > now,
+      archive: !r.archived_at && !isLive(r, now),
+    },
+    depositOpen: ["confirmed", "active", "returned"].includes(r.status) && r.ends_at <= now,
     handoff: {
       method: r.handoff ?? (r.delivery_address ? "delivery" : null),
       code: r.ac_code && cfg.codeKey ? openCode(r.ac_code, cfg.codeKey) : null,
@@ -362,6 +389,8 @@ export async function createBooking(
 
   return db.transaction(async (tx) => {
     await lockVehicle(tx, trip.vehicle.id);
+    // Booking again brings an archived renter back onto the host's list.
+    await tx.query(`UPDATE users SET archived_at = NULL, archived_by = NULL WHERE id = $1 AND archived_at IS NOT NULL`, [user.id]);
     const conflicts = await findConflicts(tx, trip.vehicle.id, trip.start, trip.end, { now });
     if (conflicts.length) throw new HttpError(409, "Those dates were just taken. Choose different dates.", "startDate");
     const { rows } = await tx.query<{ code: string }>(
@@ -404,8 +433,8 @@ export async function cancelUnpaid(db: TxDb, user: UserRecord, code: string, now
         : "This booking can't be cancelled here. Message us for help.");
     }
     await tx.query(
-      `UPDATE bookings SET status = 'cancelled', cancelled_at = $2, cancel_reason = 'Cancelled by renter before paying' WHERE id = $1`,
-      [row.id, now],
+      `UPDATE bookings SET status = 'cancelled', cancelled_at = $2, cancel_reason = $3 WHERE id = $1`,
+      [row.id, now, RENTER_CANCEL_REASON],
     );
   });
 }
@@ -476,6 +505,7 @@ export async function submitProof(
     );
     await tx.query(
       `UPDATE bookings SET status = 'payment_review', hold_expires_at = NULL, payment_method = $2, payment_note = NULL,
+         archived_at = NULL, archived_by = NULL,
          review_reasons = CASE WHEN $3 AND NOT ('dates_taken' = ANY(review_reasons))
                                THEN array_append(review_reasons, 'dates_taken') ELSE review_reasons END
        WHERE id = $1`,
@@ -529,12 +559,13 @@ export async function hostBookings(
 
 export async function hostDashboard(db: Db, cfg: PaymentConfig, now: Date) {
   const list = (where: string, order: string, params: unknown[] = []) => hostBookings(db, cfg, now, where, order, params);
+  // Live bookings always show, so a trip can't be hidden by mistake; archived ones only drop off "Deposits to return".
   const [licenses, review, awaitingPayment, upcoming, depositsDue] = await Promise.all([
     pendingLicenses(db, now),
     list(`b.status = 'payment_review'`, `b.starts_at`),
     list(`b.status = 'awaiting_payment' AND b.hold_expires_at > $1`, `b.hold_expires_at`, [now]),
     list(`b.status IN ('confirmed', 'active') AND b.ends_at > $1`, `b.starts_at`, [now]),
-    list(`b.status IN ('confirmed', 'active', 'returned') AND b.ends_at <= $1`, `b.ends_at`, [now]),
+    list(`b.status IN ('confirmed', 'active', 'returned') AND b.ends_at <= $1 AND b.archived_at IS NULL`, `b.ends_at`, [now]),
   ]);
   return { licenses, review, awaitingPayment, upcoming, depositsDue };
 }
@@ -652,18 +683,94 @@ export async function rejectPayment(
   });
 }
 
-/** The host calls off a booking that isn't confirmed yet. Any money received goes back by hand. */
-export async function cancelByHost(db: TxDb, host: UserRecord, code: string, input: { note?: unknown }, now: Date): Promise<void> {
+/** A refund amount in cents: a whole number from 0 up to `max`. */
+function refundAmount(raw: unknown, max: number, what: string): number {
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) throw badRequest("Enter the amount you sent back, or 0.", "refundCents");
+  if (raw > max) throw badRequest(`That's more than ${what} (${formatMoney(max)}).`, "refundCents");
+  return raw;
+}
+
+const recordRefund = (tx: Db, host: UserRecord, row: Row, kind: "cancellation_refund" | "early_end_refund", cents: number, note: string) =>
+  tx.query(
+    `INSERT INTO payments (booking_id, kind, amount_cents, status, method, recorded_by, note)
+     VALUES ($1, $2, $3, 'succeeded', $4, $5, $6)`,
+    [row.id, kind, -cents, row.payment_method ?? "cash_app", host.id, note || null],
+  );
+
+/**
+ * The host cancels a booking that's still in play: held dates, a payment being checked, or a
+ * confirmed trip that hasn't ended. For a paid trip the host records what they sent back. The app
+ * doesn't move money, so the refund goes out by Cash App or Chime first.
+ */
+export async function cancelByHost(
+  db: TxDb,
+  host: UserRecord,
+  code: string,
+  input: { note?: unknown; refundCents?: unknown },
+  now: Date,
+): Promise<void> {
   const note = typeof input.note === "string" ? input.note.trim().slice(0, 300) : "";
   if (!note) throw badRequest("Add a short reason for the renter.", "note");
   await db.transaction(async (tx) => {
     const row = await hostRow(tx, code);
-    if (row.status !== "awaiting_payment" && row.status !== "payment_review") {
-      throw new HttpError(409, "Only bookings that aren't confirmed yet can be cancelled here.");
+    if (!isLive(row, now)) {
+      throw new HttpError(409, row.status === "cancelled" ? "This booking is already cancelled." : "This booking is already over. Archive it to clear it from your lists.");
     }
-    await tx.query(`UPDATE bookings SET status = 'cancelled', cancelled_at = $2, cancel_reason = $3 WHERE id = $1`, [row.id, now, note]);
-    await audit(tx, host, "booking_cancelled", row, { note, hadProof: row.status === "payment_review" });
-    await notifyRenter(tx, row, "booking_cancelled", { note });
+    const paid = row.status === "confirmed" || row.status === "active";
+    const refund = paid ? refundAmount(input.refundCents, row.charge_cents - row.refunded_cents, "the renter paid") : 0;
+    if (refund > 0) await recordRefund(tx, host, row, "cancellation_refund", refund, note);
+    await tx.query(
+      `UPDATE bookings SET status = 'cancelled', cancelled_at = $2, cancel_reason = $3, refunded_cents = refunded_cents + $4 WHERE id = $1`,
+      [row.id, now, note, refund],
+    );
+    // The trip won't happen, so its lockbox code shouldn't linger.
+    await tx.query(`DELETE FROM access_codes WHERE booking_id = $1`, [row.id]);
+    await audit(tx, host, "booking_cancelled", row, { note, hadProof: row.status === "payment_review", wasConfirmed: paid, refundCents: refund });
+    await notifyRenter(tx, row, "booking_cancelled", { note, refund: refund ? formatMoney(refund) : null });
+  });
+}
+
+/**
+ * The host ends a trip before its booked return time, usually because the car came back early.
+ * The rest of the dates open up for other renters, and the deposit moves to "Deposits to return".
+ * The host can record a refund for unused days, up to the rental price.
+ */
+export async function endTripEarly(
+  db: TxDb,
+  host: UserRecord,
+  code: string,
+  input: { refundCents?: unknown; note?: unknown },
+  now: Date,
+): Promise<void> {
+  const note = typeof input.note === "string" ? input.note.trim().slice(0, 300) : "";
+  await db.transaction(async (tx) => {
+    const row = await hostRow(tx, code);
+    if (row.status !== "confirmed" && row.status !== "active") throw new HttpError(409, "Only a confirmed trip can be ended early.");
+    if (row.starts_at >= now) throw new HttpError(409, "This trip hasn't started yet. Cancel it instead.");
+    if (row.ends_at <= now) throw new HttpError(409, "This trip has already ended.");
+    const refund = refundAmount(input.refundCents ?? 0, Math.min(row.rental_cents, row.charge_cents - row.refunded_cents), "the rental price");
+    if (refund > 0) await recordRefund(tx, host, row, "early_end_refund", refund, note);
+    await tx.query(
+      `UPDATE bookings SET status = 'returned', returned_at = $2, scheduled_end_at = ends_at, ends_at = $2,
+         refunded_cents = refunded_cents + $3 WHERE id = $1`,
+      [row.id, now, refund],
+    );
+    await audit(tx, host, "trip_ended_early", row, { scheduledEnd: row.ends_at.toISOString(), refundCents: refund, note });
+    await notifyRenter(tx, row, "trip_ended_early", { refund: refund ? formatMoney(refund) : null, note });
+  });
+}
+
+/**
+ * Hides a finished booking from the host's lists, or brings it back. Nothing is deleted, and the
+ * renter still sees it in their trips. Bookings still in play have to be cancelled or ended first.
+ */
+export async function setBookingArchived(db: TxDb, host: UserRecord, code: string, archive: boolean, now: Date): Promise<void> {
+  await db.transaction(async (tx) => {
+    const row = await hostRow(tx, code);
+    if (archive && isLive(row, now)) throw new HttpError(409, "This booking is still in play. Cancel it or end the trip first.");
+    if (archive === !!row.archived_at) return;
+    await tx.query(`UPDATE bookings SET archived_at = $2, archived_by = $3 WHERE id = $1`, [row.id, archive ? now : null, archive ? host.id : null]);
+    await audit(tx, host, archive ? "booking_archived" : "booking_restored", row, {});
   });
 }
 

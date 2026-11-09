@@ -192,6 +192,12 @@ export type Booking = {
   createdAt: string;
   /** Present once the booking is confirmed. */
   pass: PickupPass | null;
+  /** Money sent back so far: cancellation, unused days and deposit. */
+  refundedCents: number;
+  /** Why the host cancelled. Null when the renter released the dates themselves. */
+  cancelReason: string | null;
+  /** Set when the host ended the trip before its booked return time. `end` is then the actual end. */
+  endedEarly: { at: string; scheduledEnd: string } | null;
 };
 
 export type CreateBookingRequest = QuoteRequest & { deliveryAddress?: string; agreementVersion: string };
@@ -210,7 +216,12 @@ export type HostBooking = Booking & {
   };
   /** Things to look at before confirming, in plain words. */
   warnings: string[];
-  refundedCents: number;
+  /** Hidden from the host's lists since this time. */
+  archivedAt: string | null;
+  /** What the host can do to this booking right now. */
+  can: { cancel: boolean; end: boolean; archive: boolean };
+  /** The trip is over and the deposit hasn't been settled yet. */
+  depositOpen: boolean;
   handoff: {
     method: Handoff | null;
     /** The lockbox code, for the host's eyes. */
@@ -226,7 +237,7 @@ export type HostBooking = Booking & {
 
 export type PaymentEntry = {
   bookingCode: string;
-  kind: "booking_charge" | "extension_charge" | "deposit_refund" | "cancellation_refund" | "late_payment_refund";
+  kind: "booking_charge" | "extension_charge" | "deposit_refund" | "cancellation_refund" | "late_payment_refund" | "early_end_refund";
   amountCents: number;
   method: string;
   note: string | null;
@@ -247,6 +258,7 @@ export type RenterSummary = {
   lastTripAt: string | null;
   joinedAt: string;
   doNotRent: boolean;
+  archived: boolean;
 };
 
 export type RenterProfile = RenterSummary & {
@@ -268,6 +280,9 @@ export type RenterProfile = RenterSummary & {
   bookings: HostBooking[];
   payments: PaymentEntry[];
 };
+
+/** Bookings and renters the host has cleared from their lists. Nothing here is deleted. */
+export type HostArchive = { bookings: HostBooking[]; renters: RenterSummary[] };
 
 export type HostDashboard = {
   licenses: LicenseReview[];

@@ -5,6 +5,7 @@ import { Header } from "./components/Header.tsx";
 import { AgreementPage } from "./pages/AgreementPage.tsx";
 import { CheckoutPage } from "./pages/CheckoutPage.tsx";
 import { Home } from "./pages/Home.tsx";
+import { HostArchivePage } from "./pages/HostArchivePage.tsx";
 import { HostBookingPage } from "./pages/HostBookingPage.tsx";
 import { HostPage } from "./pages/HostPage.tsx";
 import { HostRenterPage } from "./pages/HostRenterPage.tsx";
@@ -37,6 +38,7 @@ export function App() {
           <Route path="/host/renters" element={<HostRentersPage />} />
           <Route path="/host/renters/:id" element={<HostRenterPage />} />
           <Route path="/host/bookings/:code" element={<HostBookingPage />} />
+          <Route path="/host/archive" element={<HostArchivePage />} />
           <Route path="/license" element={<LicensePage />} />
           <Route path="/agreement" element={<AgreementPage />} />
           <Route path="*" element={<NotFound />} />

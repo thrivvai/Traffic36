@@ -14,7 +14,7 @@ import type { IdentityProvider, IdentityResult } from "../server/identity.ts";
 import { sniffImage, type ProofStore } from "../server/proofs.ts";
 import type { Services } from "../server/services.ts";
 import { MINUTE, POLICY } from "../shared/policy.ts";
-import type { Booking, HostBookingDetail, HostDashboard, Me, RenterProfile, RenterSummary } from "../shared/types.ts";
+import type { Booking, HostArchive, HostBookingDetail, HostDashboard, Me, RenterProfile, RenterSummary } from "../shared/types.ts";
 
 const GLC = "mercedes-glc-300-coupe-2021"; // drivers 25+
 const ELANTRA = "hyundai-elantra-sel-sport-2026"; // drivers 21+
@@ -182,7 +182,7 @@ beforeEach(async () => {
   for (const table of ["audit_log", "outbox", "payments", "payment_proofs", "identity_documents", "identity_submissions", "extensions", "bookings", "blocks"]) {
     await db.query(`DELETE FROM ${table}`);
   }
-  await db.query(`UPDATE users SET identity_reviewed_by = NULL`);
+  await db.query(`UPDATE users SET identity_reviewed_by = NULL, archived_by = NULL`);
   for (const table of ["users"]) {
     await db.query(`DELETE FROM ${table}`);
   }
@@ -740,12 +740,138 @@ describe("pickup pass and renter records", () => {
   test("the host can stop a renter from booking, with a reason", async () => {
     const id = (await call<{ renters: RenterSummary[] }>(api.hostRentersHandler, { path: "/api/host/renters", as: "host" })).body.renters[0]!.id;
     const block = (body: unknown) =>
-      call<{ renter: RenterProfile }>(api.hostRenterBlockHandler, { method: "POST", path: `/api/host/renters/${id}/block`, as: "host", body, params: { id } });
+      call<{ renter: RenterProfile }>(api.hostRenterActionHandler, { method: "POST", path: `/api/host/renters/${id}/block`, as: "host", body, params: { id, action: "block" } });
     expect((await block({ value: true })).body.field).toBe("note");
     expect((await block({ value: true, note: "Returned the car late twice" })).body.renter).toMatchObject({ doNotRent: true, doNotRentNote: "Returned the car late twice" });
     expect((await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).status).toBe(403);
     await block({ value: false });
     expect((await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).status).toBe(201);
+  });
+});
+
+describe("ending, cancelling and archiving trips", () => {
+  let code: string;
+  const record = (c = code) =>
+    call<{ booking: HostBookingDetail }>(api.hostBookingHandler, { path: `/api/host/bookings/${c}`, as: "host", params: { code: c } });
+  const act = (action: string, body: unknown = {}, as = "host", c = code) =>
+    call<{ booking: HostBookingDetail }>(api.hostActionHandler, { method: "POST", path: `/api/host/bookings/${c}/${action}?view=booking`, as, body, params: { code: c, action } });
+  const archive = () => call<{ archive: HostArchive }>(api.hostArchiveHandler, { path: "/api/host/archive", as: "host" });
+  const renters = () => call<{ renters: RenterSummary[] }>(api.hostRentersHandler, { path: "/api/host/renters", as: "host" });
+  const archiveRenter = (id: string, value: boolean) =>
+    call<{ renter: RenterProfile }>(api.hostRenterActionHandler, { method: "POST", path: `/api/host/renters/${id}/archive`, as: "host", body: { value }, params: { id, action: "archive" } });
+
+  beforeEach(async () => {
+    await signUp("jordan", "Jordan Ellis", "jordan@example.com");
+    await verify("jordan", "1996-05-01");
+    code = (await createBooking("jordan", ELANTRA)).body.code; // Fri Nov 6 10:00 to Mon Nov 9 10:00, Atlanta time
+    await upload("jordan", code);
+    await hostAction(code, "confirm");
+  });
+
+  test("a paid trip can be cancelled with a reason and the refund the host sent back", async () => {
+    await act("handoff", { method: "lockbox", lockboxCode: "4821" });
+    const paid = (await getBooking("jordan", code)).body.booking.totalCents;
+    expect((await act("cancel", { refundCents: paid })).body.field).toBe("note");
+    expect((await act("cancel", { note: "The car is in the shop" })).body.field).toBe("refundCents");
+    expect((await act("cancel", { note: "The car is in the shop", refundCents: paid + 1 })).body.field).toBe("refundCents");
+    expect((await act("cancel", { note: "The car is in the shop", refundCents: paid }, "jordan")).status).toBe(403);
+
+    const res = await act("cancel", { note: "The car is in the shop", refundCents: paid });
+    expect(res.body.booking).toMatchObject({ status: "cancelled", refundedCents: paid, can: { cancel: false, end: false, archive: true } });
+    expect(res.body.booking.payments.map((p) => [p.kind, p.amountCents])).toEqual([["cancellation_refund", -paid], ["booking_charge", paid]]);
+    expect(res.body.booking.activity[0]).toMatchObject({ action: "booking_cancelled", details: { refundCents: paid, wasConfirmed: true } });
+    expect((await db.query(`SELECT 1 FROM access_codes`)).rows).toHaveLength(0);
+
+    const renterView = (await getBooking("jordan", code)).body.booking;
+    expect(renterView).toMatchObject({ status: "cancelled", cancelReason: "The car is in the shop", refundedCents: paid, pass: null });
+    expect((await act("cancel", { note: "Again", refundCents: 0 })).status).toBe(409);
+
+    // The dates are free again.
+    await signUp("sam", "Sam Rivera", "sam@example.com");
+    await verify("sam", "1990-02-02");
+    expect((await createBooking("sam", ELANTRA)).status).toBe(201);
+  });
+
+  test("a renter's own early release isn't shown back to them as a host reason", async () => {
+    const other = (await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).body.code;
+    await call(api.bookingCancelHandler, { method: "POST", path: `/api/bookings/${other}/cancel`, as: "jordan", params: { code: other } });
+    expect((await getBooking("jordan", other)).body.booking).toMatchObject({ status: "cancelled", cancelReason: null });
+  });
+
+  test("a trip in progress can be ended early, which frees the rest of the dates", async () => {
+    expect((await act("end")).body.error).toMatch(/hasn't started/);
+    clock = new Date("2026-11-07T17:00:00Z"); // Sat noon
+    const { rentalCents } = (await getBooking("jordan", code)).body.booking;
+    expect((await act("end", { refundCents: rentalCents + 1 })).body.field).toBe("refundCents");
+
+    const res = await act("end", { refundCents: 50_00, note: "Came back a day early" });
+    expect(res.body.booking).toMatchObject({
+      status: "returned",
+      end: "2026-11-07T17:00:00.000Z",
+      endedEarly: { at: "2026-11-07T17:00:00.000Z", scheduledEnd: "2026-11-09T15:00:00.000Z" },
+      refundedCents: 50_00,
+      depositOpen: true,
+      can: { cancel: false, end: false, archive: true },
+    });
+    expect(res.body.booking.payments[0]).toMatchObject({ kind: "early_end_refund", amountCents: -50_00, note: "Came back a day early" });
+    expect((await getBooking("jordan", code)).body.booking.pass).toBeNull();
+    const board = (await dashboard()).body.dashboard;
+    expect(board.upcoming.map((b) => b.code)).not.toContain(code);
+    expect(board.depositsDue.map((b) => b.code)).toContain(code);
+    expect((await act("end")).status).toBe(409);
+
+    // Sunday is open for someone else now.
+    await signUp("sam", "Sam Rivera", "sam@example.com");
+    await verify("sam", "1990-02-02");
+    expect((await createBooking("sam", ELANTRA, { startDate: "2026-11-08", endDate: "2026-11-09" })).status).toBe(201);
+
+    // The deposit is returned as usual, which closes the trip.
+    expect((await hostAction(code, "deposit", { refundCents: POLICY.depositCents })).status).toBe(200);
+    expect((await getBooking("jordan", code)).body.booking).toMatchObject({ status: "closed", refundedCents: 50_00 + POLICY.depositCents });
+  });
+
+  test("only finished bookings can be archived; they leave the host's lists and come back on restore", async () => {
+    expect((await act("archive")).status).toBe(409);
+    clock = new Date("2026-11-09T18:00:00Z"); // after the return time, deposit not yet settled
+    const archived = await act("archive");
+    expect(archived.body.booking).toMatchObject({ depositOpen: true, can: { archive: false } });
+    expect(archived.body.booking.archivedAt).toBe("2026-11-09T18:00:00.000Z");
+    expect((await dashboard()).body.dashboard.depositsDue).toHaveLength(0);
+    expect((await archive()).body.archive.bookings.map((b) => b.code)).toEqual([code]);
+    // The renter still has their trip history.
+    const mine = await call<{ bookings: Booking[] }>(api.bookingsHandler, { path: "/api/bookings", as: "jordan" });
+    expect(mine.body.bookings.map((b) => b.code)).toContain(code);
+
+    expect((await act("restore")).body.booking.archivedAt).toBeNull();
+    expect((await archive()).body.archive.bookings).toHaveLength(0);
+    expect((await dashboard()).body.dashboard.depositsDue.map((b) => b.code)).toEqual([code]);
+  });
+
+  test("a late payment on an archived hold brings it back for review", async () => {
+    await signUp("sam", "Sam Rivera", "sam@example.com");
+    await verify("sam", "1990-02-02");
+    const held = (await createBooking("sam", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).body.code;
+    clock = new Date(clock.getTime() + (POLICY.holdMinutes + 1) * 60_000);
+    expect((await act("archive", {}, "host", held)).body.booking.archivedAt).not.toBeNull();
+    await upload("sam", held, { sender: "Jordan Ellis" });
+    expect((await record(held)).body.booking.archivedAt).toBeNull();
+    expect((await dashboard()).body.dashboard.review.map((b) => b.code)).toEqual([held]);
+  });
+
+  test("renters with nothing in play can be archived, and come back when they book again", async () => {
+    const id = (await renters()).body.renters[0]!.id;
+    expect((await archiveRenter(id, true)).status).toBe(409);
+    await act("cancel", { note: "Test booking", refundCents: 0 });
+    expect((await archiveRenter(id, true)).body.renter).toMatchObject({ archived: true });
+    expect((await renters()).body.renters).toHaveLength(0);
+    expect((await archive()).body.archive.renters.map((r) => r.id)).toEqual([id]);
+    expect((await archiveRenter(id, false)).body.renter.archived).toBe(false);
+    await archiveRenter(id, true);
+
+    expect((await createBooking("jordan", GLC, { startDate: "2026-11-20", endDate: "2026-11-22" })).status).toBe(201);
+    expect((await renters()).body.renters.map((r) => r.id)).toEqual([id]);
+    const actions = await db.query<{ action: string }>(`SELECT action FROM audit_log WHERE entity = 'user' ORDER BY created_at`);
+    expect(actions.rows.map((r) => r.action)).toEqual(["renter_archived", "renter_restored", "renter_archived"]);
   });
 });
 

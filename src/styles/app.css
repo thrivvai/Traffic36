@@ -628,3 +628,27 @@ a.minirow:hover { border-color: var(--line2); background: var(--elev); }
   .rtrip { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "car end" "when end" "code end"; }
   .pass-where { flex-wrap: wrap; }
 }
+
+/* host: trip controls and archive */
+.lede { margin: -6px 0 6px; font-size: 14.5px; color: var(--muted); }
+.manage-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.manage-actions .btn svg { margin-right: 6px; }
+.manage-form { display: grid; gap: 14px; }
+.manage-form > p { font-size: 14px; color: var(--soft); }
+.manage-form .hint .link { font-size: inherit; }
+.money-input { position: relative; display: block; max-width: 200px; }
+.money-input > span { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.money-input .input { padding-left: 26px; font-variant-numeric: tabular-nums; }
+.note.archived { align-items: center; border-color: var(--line2); color: var(--soft); }
+.note.archived > span { flex: 1; min-width: 0; }
+.note.archived svg { flex: none; color: var(--amber); }
+.bad-text { display: block; margin-top: 4px; font-weight: 600; color: #ffb3ac; }
+.rtrip-tags { display: flex; gap: 6px; }
+.arow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.arow .rrow { min-width: 0; }
+
+@media (max-width: 760px) {
+  .arow { grid-template-columns: 1fr; gap: 6px; }
+  .arow > .btn { justify-self: end; }
+  .note.archived { flex-wrap: wrap; }
+}

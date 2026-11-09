@@ -2,6 +2,7 @@
 import type { Db, TxDb } from "./db.ts";
 import { HttpError, badRequest, notFound } from "./http.ts";
 import { hostBookings, type PaymentConfig } from "./bookings.ts";
+import type { HostArchive } from "../shared/types.ts";
 import type { UserRecord } from "./users.ts";
 import { POLICY } from "../shared/policy.ts";
 import { ageAt, validThrough } from "../shared/pricing.ts";
@@ -28,11 +29,12 @@ type SummaryRow = {
   last_trip_at: Date | null;
   created_at: Date;
   do_not_rent: boolean;
+  archived_at: Date | null;
 };
 
 const SUMMARY = `
   SELECT u.id, u.name, u.identity_name, u.email, u.phone, u.identity_status, u.identity_method,
-         u.license_expires_on::text AS license_expires_on, u.created_at, u.do_not_rent,
+         u.license_expires_on::text AS license_expires_on, u.created_at, u.do_not_rent, u.archived_at,
          (SELECT count(*)::int FROM bookings b WHERE b.renter_id = u.id AND b.status IN ('confirmed', 'active', 'returned', 'closed')) AS trips,
          (SELECT max(b.starts_at) FROM bookings b WHERE b.renter_id = u.id AND b.status IN ('confirmed', 'active', 'returned', 'closed')) AS last_trip_at
     FROM users u`;
@@ -53,20 +55,24 @@ const summary = (r: SummaryRow, now: Date): RenterSummary => ({
   lastTripAt: r.last_trip_at?.toISOString() ?? null,
   joinedAt: r.created_at.toISOString(),
   doNotRent: r.do_not_rent,
+  archived: !!r.archived_at,
 });
 
-/** Everyone who has signed up as a renter, newest activity first. `q` matches name, email or phone. */
-export async function listRenters(db: Db, q: string, now: Date): Promise<RenterSummary[]> {
+/**
+ * Everyone who has signed up as a renter, newest activity first. `q` matches name, email or phone.
+ * Archived renters are listed only when asked for.
+ */
+export async function listRenters(db: Db, q: string, now: Date, opts: { archived?: boolean } = {}): Promise<RenterSummary[]> {
   const term = q.trim().slice(0, 80);
   const digits = term.replace(/\D/g, "");
   const { rows } = await db.query<SummaryRow>(
     `${SUMMARY}
-      WHERE u.role = 'renter'
+      WHERE u.role = 'renter' AND (u.archived_at IS NOT NULL) = $3
         AND ($1 = '' OR u.name ILIKE '%' || $1 || '%' OR u.identity_name ILIKE '%' || $1 || '%' OR u.email ILIKE '%' || $1 || '%'
              OR ($2 <> '' AND regexp_replace(coalesce(u.phone, ''), '\\D', '', 'g') LIKE '%' || $2 || '%'))
       ORDER BY coalesce((SELECT max(b.created_at) FROM bookings b WHERE b.renter_id = u.id), u.created_at) DESC
       LIMIT 200`,
-    [term, digits.length >= 3 ? digits : ""],
+    [term, digits.length >= 3 ? digits : "", !!opts.archived],
   );
   return rows.map((r) => summary(r, now));
 }
@@ -173,4 +179,47 @@ export async function setDoNotRent(db: TxDb, host: UserRecord, id: string, input
       { note },
     ]);
   });
+}
+
+/**
+ * Hides a renter from the host's list, or brings them back. Nothing about them is deleted, and they
+ * come back on their own if they book again or send a new license. A renter with a trip still in
+ * play can't be archived until it's cancelled or ended.
+ */
+export async function setRenterArchived(db: TxDb, host: UserRecord, id: string, input: { value?: unknown }, now: Date): Promise<void> {
+  uuid(id);
+  if (typeof input.value !== "boolean") throw badRequest("Choose whether to archive this renter.", "value");
+  const archive = input.value;
+  await db.transaction(async (tx) => {
+    const { rows } = await tx.query<{ role: string; archived_at: Date | null }>(`SELECT role, archived_at FROM users WHERE id = $1 FOR UPDATE`, [id]);
+    const u = rows[0];
+    if (!u) throw notFound("We couldn't find that renter.");
+    if (u.role !== "renter") throw new HttpError(409, "Only renter accounts can be archived.");
+    if (archive) {
+      const { rows: live } = await tx.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM bookings
+          WHERE renter_id = $1 AND (status = 'payment_review'
+             OR (status = 'awaiting_payment' AND hold_expires_at > $2)
+             OR (status IN ('confirmed', 'active') AND ends_at > $2))`,
+        [id, now],
+      );
+      if ((live[0]?.n ?? 0) > 0) throw new HttpError(409, "This renter has a booking still in play. Cancel it or end the trip first.");
+    }
+    if (archive === !!u.archived_at) return;
+    await tx.query(`UPDATE users SET archived_at = $2, archived_by = $3 WHERE id = $1`, [id, archive ? now : null, archive ? host.id : null]);
+    await tx.query(`INSERT INTO audit_log (actor_id, action, entity, entity_id, details) VALUES ($1, $2, 'user', $3, '{}')`, [
+      host.id,
+      archive ? "renter_archived" : "renter_restored",
+      id,
+    ]);
+  });
+}
+
+/** Everything the host has cleared from their lists, most recent first. */
+export async function hostArchive(db: Db, cfg: PaymentConfig, now: Date): Promise<HostArchive> {
+  const [bookings, renters] = await Promise.all([
+    hostBookings(db, cfg, now, "b.archived_at IS NOT NULL", "b.archived_at DESC", [], 200),
+    listRenters(db, "", now, { archived: true }),
+  ]);
+  return { bookings, renters };
 }
